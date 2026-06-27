@@ -1,0 +1,19 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# Rust / Tauri
+src-tauri/target
+
+# editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# worktrees
+.worktrees
+
+# Claude Code (local, not published)
+CLAUDE.md
+CLAUDE.local.md

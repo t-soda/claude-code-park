@@ -1,0 +1,65 @@
+name: Release
+
+# Pushing a tag that starts with `v` (e.g. v0.1.0) builds the app and creates a Release.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Needed for tauri-action to create/update the Release.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macOS-only app (depends on osascript / ps). Use a macOS runner to build a single universal binary.
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both arch targets for universal-apple-darwin.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No signing/notarization (free distribution). Tauri ad-hoc signs automatically.
+        with:
+          # Build a single .dmg for both Intel and Apple Silicon.
+          args: --target universal-apple-darwin
+          tagName: ${{ github.ref_name }}
+          releaseName: "Claude Code Park ${{ github.ref_name }}"
+          releaseBody: |
+            ## Install (macOS)
+
+            1. Download the `.dmg` from the Assets below, open it, and drag Claude Code Park into Applications.
+            2. The app is unsigned, so on first launch macOS Gatekeeper will warn you. Open it one of these ways:
+               - **macOS 14 or earlier**: right-click the app → "Open".
+               - **macOS 15 (Sequoia) or later**: System Settings → "Privacy & Security" → "Open Anyway".
+               - Or from a terminal:
+                 ```
+                 xattr -dr com.apple.quarantine "/Applications/Claude Code Park.app"
+                 ```
+
+            ⚠️ This app reads and visualizes `~/.claude/`, so it assumes macOS with Claude Code installed.
+          releaseDraft: true
+          prerelease: false

@@ -1,0 +1,779 @@
+:root {
+  --bg: #1b1f2a;
+  --panel: #232838;
+  --panel-2: #2c3247;
+  --line: #3a4159;
+  --text: #e6e9f0;
+  --muted: #8b93a7;
+  --accent: #f0883e; /* Claude orange */
+  --accent-2: #6aa3ff;
+  font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.tabbar {
+  display: flex;
+  gap: 4px;
+  /* 12px top/bottom gives roughly a Finder-toolbar height, leaving room for the traffic-light buttons.
+     96px on the left is padding for the width of the macOS traffic-light buttons (which float over the content with titleBarStyle: Overlay),
+     placing "Claude Code Park" a little to the right of the buttons with some spacing. */
+  padding: 12px 16px 12px 96px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+
+.tabbar .brand {
+  font-weight: 700;
+  margin-right: 16px;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tab:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.tab.active {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.office-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.office-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.office-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.legend-item {
+  background: rgba(13, 16, 23, 0.7);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-item i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.office-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.8;
+}
+.office-empty span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.placeholder-panel {
+  padding: 24px;
+  color: var(--muted);
+}
+
+/* Shared styles for the settings-management panels */
+.panel {
+  height: 100%;
+  overflow: auto;
+  padding: 20px 24px;
+}
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.panel .sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.card.clickable {
+  cursor: pointer;
+}
+.card.clickable:hover {
+  border-color: var(--accent-2);
+}
+.card .title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card .desc {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.badge.on {
+  color: #34d399;
+  border-color: #34d39955;
+}
+.badge.off {
+  color: #ef4444;
+  border-color: #ef444455;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+.hook-event {
+  font-family: ui-monospace, monospace;
+  color: var(--accent-2);
+  font-weight: 600;
+}
+.cmd-row {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  background: #0d1017;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 6px;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* hook firing flow (top to bottom, with a number rail on the left) */
+.hook-flow {
+  display: flex;
+  flex-direction: column;
+}
+.hook-row {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+.hook-row .card {
+  flex: 1;
+  margin-bottom: 0;
+}
+/* Left vertical rail: number -> a vertical line spanning that card */
+.hook-rail {
+  width: 26px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 14px; /* match the card's padding-top so the circle aligns with the title row */
+}
+/* Step number indicating the order (color is set by JS as a continuous 1->N gradient) */
+.hook-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 999px;
+  color: #0d1017;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.hook-rail-line {
+  width: 2px;
+  flex: 1;
+  margin-top: 3px;
+  border-radius: 2px;
+}
+/* Between cards: a vertical line aligned with the number column + a downward arrow (color set by JS) */
+.hook-connector {
+  width: 26px; /* same as the rail width = centers line up */
+  height: 26px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.hook-connector-line {
+  width: 2px;
+  flex: 1;
+  border-radius: 2px;
+}
+.hook-connector-chevron {
+  width: 8px;
+  height: 8px;
+  margin-top: -5px;
+  border-right: 2px solid;
+  border-bottom: 2px solid;
+  transform: rotate(45deg);
+}
+/* Unconfigured timings: always shown faintly as a reference */
+.hook-row-empty .card {
+  opacity: 0.5;
+  border-style: dashed;
+  background: transparent;
+}
+.hook-row-empty .hook-step-num {
+  opacity: 0.4;
+}
+.hook-row-empty .hook-event {
+  color: var(--muted);
+}
+.hook-empty-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
+.err {
+  color: #ef4444;
+  font-size: 13px;
+}
+
+/* Detail drawer */
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 10;
+}
+.drawer {
+  width: min(560px, 80%);
+  height: 100%;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  padding: 20px 24px;
+  overflow: auto;
+}
+.drawer .close {
+  float: right;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 6px 12px;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.kv .k {
+  color: var(--muted);
+}
+.body-md {
+  background: #0d1017;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+/* Confirmation dialog (in-app modal: because WKWebView ignores window.confirm) */
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+.confirm-box {
+  width: min(420px, 86%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 22px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.confirm-box .confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.confirm-box .confirm-msg {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  word-break: break-all;
+}
+.confirm-box .confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* Forms */
+.btn {
+  background: var(--accent-2);
+  color: #0d1017;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover {
+  filter: brightness(1.08);
+}
+.btn.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.btn.danger {
+  background: #ef4444;
+  color: #fff;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 12px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.field label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.field input,
+.field select,
+.field textarea {
+  background: #0d1017;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.field textarea {
+  min-height: 140px;
+  font-family: ui-monospace, monospace;
+  resize: vertical;
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.card .card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Metrics table */
+.window-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.mtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.mtable th,
+.mtable td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mtable th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+.mtable td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.util-bar {
+  position: relative;
+  background: var(--panel-2);
+  border-radius: 6px;
+  height: 16px;
+  width: 140px;
+  overflow: hidden;
+}
+.util-bar > span {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #34d399, #f0883e);
+  border-radius: 6px;
+}
+.util-bar > em {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 16px;
+  color: #0d1017;
+  font-weight: 700;
+}
+.agent-name {
+  font-weight: 600;
+}
+.agent-name .tag {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.metrics-inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0;
+}
+.metric-box {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.metric-box .label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.metric-box .value {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Skeleton shown during the initial metrics load (avoids showing blankness or a freeze) */
+.skel {
+  display: inline-block;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--panel-2) 25%,
+    var(--line) 37%,
+    var(--panel-2) 63%
+  );
+  background-size: 400% 100%;
+  animation: skel-shimmer 1.2s ease-in-out infinite;
+}
+.skel-name {
+  width: 60%;
+}
+.skel-num {
+  width: 36px;
+}
+.skel-bar {
+  width: 140px;
+  height: 16px;
+  border-radius: 6px;
+}
+@keyframes skel-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel {
+    animation: none;
+  }
+}
+
+/* Character log-history dialog (absolutely positioned within office-wrap, pinned to where it opened). */
+.log-dialog {
+  position: absolute;
+  width: 420px;
+  max-height: 60%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+  overflow: hidden;
+}
+.log-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.log-dialog-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-dialog-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.log-dialog-body {
+  overflow: auto;
+  padding: 6px 12px 10px;
+}
+.log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.log-kind {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+.log-detail {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.log-tool {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.log-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.5;
+}
+.log-empty {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 8px 0;
+}
+
+/* Hook slot detail dialog */
+.hook-order { opacity: 0.6; font-size: 0.85em; }
+.hook-detail-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08); }
+.hook-detail-row:first-child { border-top: none; }
+.hook-detail-matcher { font-size: 0.8em; opacity: 0.8; margin: 2px 0; }
+.hook-scope {
+  display: inline-block; font-size: 0.72em; padding: 1px 6px; border-radius: 4px;
+  background: rgba(192,132,252,0.18); color: #c084fc;
+}
+.hook-scope-project { background: rgba(96,173,91,0.18); color: #60ad5b; }
+.hook-scope-local { background: rgba(240,136,62,0.18); color: #f0883e; }
+.hook-scope-plugin { background: rgba(106,163,255,0.18); color: #6aa3ff; }
+
+.hook-tip {
+  position: absolute; z-index: 20; pointer-events: none;
+  max-width: 280px; padding: 4px 8px; border-radius: 6px;
+  background: rgba(20,24,34,0.94); color: #e6e9ef; font-size: 12px;
+  border: 1px solid rgba(192,132,252,0.5); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Menu beside the signboard (small menu) */
+.room-menu {
+  position: absolute;
+  width: 160px;
+  background: #241a10;
+  border: 1px solid #caa64e;
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  /* Below the panel (.room-panel: z-index 32). Keeps the Metrics window in front.
+     The menu sits to the left of the panel, so they normally don't overlap. */
+  z-index: 31;
+}
+.room-menu-head {
+  color: #f6ecc9;
+  font-size: 12px;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid rgba(202, 166, 78, 0.4);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: #f6ecc9;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.room-menu-item:hover {
+  background: rgba(202, 166, 78, 0.18);
+}
+.room-menu-item.active {
+  background: rgba(202, 166, 78, 0.32);
+  color: #fff;
+}
+
+/* Scoped panel (floating) */
+/* Panels such as Metrics are floating windows layered on top of the menu.
+   The town is not dimmed (no backdrop). Position stays as the original centered layout (the panel centers itself). */
+.room-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(900px, 92%);
+  height: min(80%, 720px);
+  background: var(--bg, #14181f);
+  border: 1px solid #2a323d;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  z-index: 32;
+}
+.room-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a323d;
+}
+.room-panel-scope {
+  flex: 1;
+  color: var(--muted, #9aa4b2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.room-panel-body {
+  flex: 1;
+  overflow: auto;
+}
+
+/* Badge for Agent-derived items */
+.scope-tag {
+  display: inline-block; margin-left: 8px; font-size: 0.7em; padding: 1px 6px;
+  border-radius: 4px; vertical-align: middle;
+  background: rgba(192,132,252,0.18); color: #c084fc;
+}
+.scope-tag.scope-project { background: rgba(96,173,91,0.18); color: #60ad5b; }
+.scope-tag.scope-plugin { background: rgba(106,163,255,0.18); color: #6aa3ff; }
+.scope-tag.override { background: rgba(240,136,62,0.18); color: #f0883e; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  background: rgba(36, 26, 16, 0.95);
+  color: #f6ecc9;
+  border: 1px solid #caa64e;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  z-index: 1000;
+  pointer-events: none;
+}
