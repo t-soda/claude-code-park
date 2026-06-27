@@ -78,6 +78,14 @@ function empKey(run: SubAgentRun, i: number): string {
   return run.agent_id || `idx${i}`;
 }
 
+/**
+ * Callout-map key for an employee, namespaced by session. The same agent_id can appear in two
+ * sessions at once; without this they'd collapse onto one shared bubble (two leader lines, one Idle bubble).
+ */
+function empCalloutKey(sessionId: string, key: string): string {
+  return `${sessionId} ${key}`;
+}
+
 /** Session display name shown on the sign (same logic as the Orchestrator sprite's name tag). */
 function sessionLabel(s: Session): string {
   return s.slug ?? s.project.split("/").pop() ?? s.session_id.slice(0, 6);
@@ -560,7 +568,7 @@ export class WorldRenderer {
       );
       const runs = session.subagents.filter((r) => r.status !== "Ended");
       runs.forEach((run, i) => {
-        const key = empKey(run, i);
+        const key = empCalloutKey(session.session_id, empKey(run, i));
         liveCalloutKeys.add(key);
         this.ensureCallout(key).setState(
           run.current.kind,
@@ -796,6 +804,7 @@ export class WorldRenderer {
   /** World placement of callouts (overlap avoidance + leader lines). */
   private placeCallouts(dt: number) {
     const keys: string[] = [];
+    const sprites: (OrchestratorSprite | EmployeeSprite)[] = [];
     const anchors: { x: number; y: number }[] = [];
     const boxes: CalloutBox[] = [];
     for (const st of this.views.values()) {
@@ -805,16 +814,19 @@ export class WorldRenderer {
         const ay = st.orch.y + st.orch.headOffsetY;
         const { w, h } = oc.size;
         keys.push(st.orch.sessionId);
+        sprites.push(st.orch);
         anchors.push({ x: ax, y: ay });
         boxes.push({ anchorX: ax, anchorY: ay, w, h });
       }
       for (const [key, emp] of st.employees) {
-        const ec = this.callouts.get(key);
+        const ck = empCalloutKey(st.orch.sessionId, key);
+        const ec = this.callouts.get(ck);
         if (!ec || !ec.visibleSize) continue;
         const ax = emp.x;
         const ay = emp.y + emp.headOffsetY;
         const { w, h } = ec.size;
-        keys.push(key);
+        keys.push(ck);
+        sprites.push(emp);
         anchors.push({ x: ax, y: ay });
         boxes.push({ anchorX: ax, anchorY: ay, w, h });
       }
@@ -830,17 +842,7 @@ export class WorldRenderer {
       const p = placed[i];
       c.applyPosition(p.x, p.y, k);
       // Follow the owner sprite's opacity.
-      for (const st of this.views.values()) {
-        if (st.orch.sessionId === key) {
-          c.alpha = st.orch.alpha;
-          break;
-        }
-        const emp = st.employees.get(key);
-        if (emp) {
-          c.alpha = emp.alpha;
-          break;
-        }
-      }
+      c.alpha = sprites[i].alpha;
       const idealX = boxes[i].anchorX;
       const idealY = boxes[i].anchorY - boxes[i].h / 2;
       const disp = Math.hypot(c.x - idealX, c.y - idealY);
