@@ -266,12 +266,22 @@ let loaded = false;
 export async function loadAssets(): Promise<void> {
   if (loaded) return;
   loaded = true;
+  // Decode textures on the main thread instead of a Web Worker. The packaged app is served over the
+  // `tauri://` custom scheme, whose URL-scheme handler only services the main WKWebView frame, so fetches
+  // from a Worker context fail. The dev server (http://localhost) has no such restriction.
+  Assets.setPreferences({ preferWorkers: false });
   const jobs: Promise<void>[] = [];
   for (const def of Object.values(REGISTRY)) {
     for (const v of Object.values(def.variants)) {
       if (!v) continue;
+      // Resolve to an absolute, same-origin URL before handing it to Pixi. Pixi's own path join mangles a
+      // root-absolute path like `/tiles/floor.png` into `tauri://tiles/floor.png` (the leading segment
+      // becomes the host), which misses Tauri's `localhost` asset handler and is then blocked by the CSP
+      // `connect-src 'self'`. Pre-resolving against document.baseURI yields `tauri://localhost/tiles/...`
+      // (same origin), which loads in the packaged app and stays correct under the Vite dev server too.
+      const url = new URL(v.path, document.baseURI).href;
       jobs.push(
-        Assets.load(v.path)
+        Assets.load(url)
           .then((t: Texture) => {
             t.source.scaleMode = "nearest";
             v.texture = t;

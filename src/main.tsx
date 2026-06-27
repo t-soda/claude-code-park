@@ -1,3 +1,9 @@
+// Patch Pixi.js to avoid `new Function`/eval when building its WebGL shader & uniform sync code.
+// The packaged app is served over the `tauri://` custom scheme under a strict CSP (`script-src 'self'`,
+// no `unsafe-eval`), so without this the renderer fails to init and the office renders fully black.
+// The Vite dev server uses a relaxed CSP, which is why it only reproduces in the built app.
+// Must run before any Pixi Application/renderer is created, hence the first import.
+import "pixi.js/unsafe-eval";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
