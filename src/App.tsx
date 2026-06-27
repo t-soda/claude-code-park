@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { OfficeView } from "./office/OfficeView";
 import { useWorldStore } from "./stores/worldStore";
 import { useConfigStore } from "./stores/configStore";
+import { useScopedConfigStore } from "./stores/scopedConfigStore";
+import { useEffectiveHooksStore } from "./stores/effectiveHooksStore";
 import { AgentsManager } from "./components/AgentsManager";
 import { HooksManager } from "./components/HooksManager";
 import { SkillsManager } from "./components/SkillsManager";
@@ -27,6 +29,8 @@ export function App() {
   const start = useWorldStore((s) => s.start);
   const loadConfig = useConfigStore((s) => s.loadAll);
   const watchConfig = useConfigStore((s) => s.watch);
+  const watchScoped = useScopedConfigStore((s) => s.watch);
+  const watchEffective = useEffectiveHooksStore((s) => s.watch);
   const configError = useConfigStore((s) => s.error);
 
   useEffect(() => {
@@ -36,7 +40,10 @@ export function App() {
     start().catch((e) => console.error("Failed to fetch initial state:", e));
     loadConfig();
     watchConfig();
-  }, [start, loadConfig, watchConfig]);
+    // Project-scoped config and effective hooks also follow CLI-side changes live (incl. project .claude).
+    watchScoped();
+    watchEffective();
+  }, [start, loadConfig, watchConfig, watchScoped, watchEffective]);
 
   return (
     <div className="app">

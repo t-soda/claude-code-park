@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, type EffectiveHooks } from "../ipc/commands";
+import { onConfigChanged } from "../ipc/events";
 
 /** Returns the deduplicated non-empty project(cwd) values from a set of sessions (pure function). */
 export function uniqueProjects(sessions: { project: string }[]): string[] {
@@ -13,9 +14,15 @@ interface EffectiveHooksState {
   byProject: Record<string, EffectiveHooks>;
   /** Fetches and stores unfetched projects (already-fetched ones aren't refetched). */
   ensure: (projects: string[]) => Promise<void>;
+  /** Force-refetches the given projects, bypassing the cache (e.g. when a panel reopens). */
+  reload: (projects: string[]) => Promise<void>;
   /** Refetches all known projects (on config change). */
   refresh: () => Promise<void>;
+  /** Subscribes once to CLI-side config changes and refetches known projects. */
+  watch: () => Promise<void>;
 }
+
+let watching = false;
 
 export const useEffectiveHooksStore = create<EffectiveHooksState>((set, get) => ({
   byProject: {},
@@ -25,6 +32,19 @@ export const useEffectiveHooksStore = create<EffectiveHooksState>((set, get) => 
     if (missing.length === 0) return;
     const results = await Promise.all(
       missing.map((p) =>
+        api
+          .getEffectiveHooks(p)
+          .then((eff) => [p, eff] as const)
+          .catch(() => [p, {} as EffectiveHooks] as const)
+      )
+    );
+    const next = { ...get().byProject };
+    for (const [p, eff] of results) next[p] = eff;
+    set({ byProject: next });
+  },
+  async reload(projects) {
+    const results = await Promise.all(
+      projects.map((p) =>
         api
           .getEffectiveHooks(p)
           .then((eff) => [p, eff] as const)
@@ -48,5 +68,10 @@ export const useEffectiveHooksStore = create<EffectiveHooksState>((set, get) => 
     const next: Record<string, EffectiveHooks> = {};
     for (const [p, eff] of results) next[p] = eff;
     set({ byProject: next });
+  },
+  async watch() {
+    if (watching) return;
+    watching = true;
+    await onConfigChanged(() => void get().refresh());
   },
 }));

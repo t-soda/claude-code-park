@@ -35,10 +35,14 @@ pub fn run() {
                     state.world.lock().unwrap().agents = agents;
                 }
             }
+            // Channel carrying the set of active project working dirs from the session
+            // watcher to the config watcher (so it can live-watch each <project>/.claude).
+            let (proj_tx, proj_rx) =
+                std::sync::mpsc::channel::<std::collections::HashSet<std::path::PathBuf>>();
             // Spawn the session watcher thread (tails JSONL under projects).
-            watcher::spawn(app.handle().clone());
+            watcher::spawn(app.handle().clone(), proj_tx);
             // Config file watcher (CLI -> GUI sync).
-            watcher::config::spawn(app.handle().clone());
+            watcher::config::spawn(app.handle().clone(), proj_rx);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -50,9 +50,11 @@ export function HooksManager({ project }: { project?: string }) {
   const events = eventOrder(effective, hooks);
 
   useEffect(() => {
-    src.ensure();
-    eff.ensure([effKey]);
-  }, [src.ensure, eff.ensure, effKey]);
+    // Force a fresh read every time the panel opens so externally edited settings.json /
+    // settings.local.json are reflected (the cache would otherwise keep a stale/empty result).
+    src.reload();
+    eff.reload([effKey]);
+  }, [src.reload, eff.reload, effKey]);
 
   const [event, setEvent] = useState<string>(EVENTS[0]);
   const [matcher, setMatcher] = useState("");

@@ -5,7 +5,8 @@ use crate::state::AppState;
 use chrono::Utc;
 use notify_debouncer_full::new_debouncer;
 use notify_debouncer_full::notify::{EventKind, RecursiveMode};
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,20 +22,27 @@ pub const EV_SESSIONS: &str = "state://sessions/updated";
 pub const EV_LIFECYCLE: &str = "state://lifecycle/fired";
 
 /// Spawns the watcher thread. Called from setup().
-pub fn spawn(app: AppHandle) {
+/// `proj_tx` carries the set of active project working dirs to the config watcher.
+pub fn spawn(app: AppHandle, proj_tx: mpsc::Sender<HashSet<PathBuf>>) {
     std::thread::spawn(move || {
-        if let Err(e) = run(app) {
+        if let Err(e) = run(app, proj_tx) {
             eprintln!("[claude-code-park][watcher] watch loop ended: {e}");
         }
     });
 }
 
-fn run(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+fn run(
+    app: AppHandle,
+    proj_tx: mpsc::Sender<HashSet<PathBuf>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let projects_dir = app.state::<AppState>().paths.projects_dir();
     let mut tail = TailReader::new();
+    // Last project-dir set sent to the config watcher (only pushed on change to avoid churn).
+    let mut last_dirs: HashSet<PathBuf> = HashSet::new();
 
     initial_scan(&app, &projects_dir, &mut tail);
     emit_sessions(&app);
+    sync_project_dirs(&app, &proj_tx, &mut last_dirs);
 
     if !projects_dir.is_dir() {
         eprintln!(
@@ -68,12 +76,15 @@ fn run(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if changed {
                     emit_sessions(&app);
+                    sync_project_dirs(&app, &proj_tx, &mut last_dirs);
                 }
             }
             Ok(Err(errs)) => eprintln!("[claude-code-park][watcher] error: {errs:?}"),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Even with no events, recompute status to reflect idle/ended transitions.
                 emit_sessions(&app);
+                // Sessions may have transitioned to Ended here, so re-sync watched dirs.
+                sync_project_dirs(&app, &proj_tx, &mut last_dirs);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
@@ -181,4 +192,29 @@ fn emit_sessions(app: &AppHandle) {
         v
     };
     let _ = app.emit(EV_SESSIONS, sessions);
+}
+
+/// Computes the working dirs of currently displayable sessions and, when the set differs from
+/// what was last sent, pushes it to the config watcher. The set is deduplicated by nature, so a
+/// dir stays watched while any session uses it and is released once the last one ends.
+fn sync_project_dirs(
+    app: &AppHandle,
+    tx: &mpsc::Sender<HashSet<PathBuf>>,
+    last: &mut HashSet<PathBuf>,
+) {
+    let dirs: HashSet<PathBuf> = {
+        let state = app.state::<AppState>();
+        let world = state.world.lock().unwrap();
+        world
+            .sessions
+            .values()
+            .filter(|s| session_tracker::is_displayable(s))
+            .filter(|s| !s.project.is_empty())
+            .map(|s| PathBuf::from(&s.project))
+            .collect()
+    };
+    if dirs != *last {
+        *last = dirs.clone();
+        let _ = tx.send(dirs);
+    }
 }

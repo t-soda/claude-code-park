@@ -13,6 +13,8 @@ export interface ConfigSource {
   loaded: boolean;
   error: string | null;
   ensure: () => void;
+  /** Force-refetches this scope's config, bypassing the cache (e.g. when a panel reopens). */
+  reload: () => void;
   saveAgent: (agent: AgentDef, create: boolean) => Promise<void>;
   deleteAgent: (name: string) => Promise<void>;
   toggleSkill: (name: string, disable: boolean) => Promise<void>;
@@ -36,6 +38,7 @@ export function bundleGlobal(s: GlobalState): ConfigSource {
     loaded: s.loaded,
     error: s.error,
     ensure: () => {},
+    reload: () => void s.loadAll(),
     saveAgent: s.saveAgent,
     deleteAgent: s.deleteAgent,
     toggleSkill: s.toggleSkill,
@@ -54,6 +57,7 @@ export function bundleScoped(s: ScopedState, project: string): ConfigSource {
     loaded: slice.loaded,
     error: slice.error,
     ensure: () => s.ensure(project),
+    reload: () => void s.reload(project),
     saveAgent: (agent, create) => s.saveAgent(project, agent, create),
     deleteAgent: (name) => s.deleteAgent(project, name),
     toggleSkill: (name, disable) => s.toggleSkill(project, name, disable),
