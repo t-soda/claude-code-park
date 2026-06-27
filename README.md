@@ -9,6 +9,8 @@ It treats your local `~/.claude/` as the single source of truth, drawing agents 
 
 Claude Code's Hooks, Skills, and Agents are spread across many config locations, making it hard to answer "**what is this session actually composed of right now?**" Claude Code Park lets you see and understand it at a glance.
 
+A concrete case: keeping Claude aligned with your team's conventions is hard with prompts alone — a single session tends to drift mid-task. Hooks that check and block violations are more reliable, but wiring them up in plain config and trusting they actually fire is tedious. Claude Code Park makes that setup visible: which hooks are active per session, and whether they really fire.
+
 - **Visualize hooks per session** — see the hook setup that actually applies to a session (including plugin-provided hooks) in one place.
   ![Hooks](media/hooks-manager.png)
 - **Learn when hooks fire** — an animation shows when and which hook ran, so you can grasp the hook lifecycle just by watching real behavior.
