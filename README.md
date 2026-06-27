@@ -14,7 +14,6 @@ Claude Code's Hooks, Skills, and Agents are spread across many config locations,
 - **Learn when hooks fire** — an animation shows when and which hook ran, so you can grasp the hook lifecycle just by watching real behavior.
   ![Hook firing](media/hooks-timeline.gif)
 - **Visualize Skills & Agents** — see which agents and skills are defined, and which ones are currently "at work."
-  ![Agents & Skills](media/agents-skills.png)
 - **Manage multiple sessions on one screen** — run several Claude Code sessions at once and track all of their progress from a single view.
   ![Multi session](media/multi-session.gif)
 - **Jump back to the terminal in one click** — click an employee/session to bring the terminal that launched it (Terminal.app / iTerm2 / VS Code / Ghostty) to the front.
