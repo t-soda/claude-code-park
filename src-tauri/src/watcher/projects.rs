@@ -69,7 +69,7 @@ fn run(
                         continue;
                     }
                     for path in &ev.paths {
-                        if process_path(&app, &projects_dir, &mut tail, path) {
+                        if process_path(&app, &projects_dir, &mut tail, path, true) {
                             changed = true;
                         }
                     }
@@ -106,7 +106,10 @@ fn initial_scan(app: &AppHandle, projects_dir: &Path, tail: &mut TailReader) {
             .unwrap_or(false);
 
         if recent {
-            if process_path(app, projects_dir, tail, &entry) {
+            // emit_lifecycle=false: don't fire per-entry lifecycle events for historical
+            // entries (a heavy restore window would flood the webview with tens of
+            // thousands of IPC emits at startup, and the animations would be stale anyway).
+            if process_path(app, projects_dir, tail, &entry, false) {
                 restored += 1;
             }
         } else {
@@ -118,11 +121,14 @@ fn initial_scan(app: &AppHandle, projects_dir: &Path, tail: &mut TailReader) {
 }
 
 /// Processes one path and updates the World. Returns true if anything changed.
+/// `emit_lifecycle` controls whether reconstructed lifecycle events are sent to the
+/// frontend (true for live updates, false for the startup restore scan).
 fn process_path(
     app: &AppHandle,
     projects_dir: &Path,
     tail: &mut TailReader,
     path: &Path,
+    emit_lifecycle: bool,
 ) -> bool {
     let Some(target) = route_path(projects_dir, path) else {
         return false;
@@ -151,8 +157,10 @@ fn process_path(
             } => session_tracker::apply_sub(&mut world, parent_id, agent_id, &entries, &mut events),
         }
     };
-    for ev in events {
-        let _ = app.emit(EV_LIFECYCLE, ev);
+    if emit_lifecycle {
+        for ev in events {
+            let _ = app.emit(EV_LIFECYCLE, ev);
+        }
     }
     changed
 }

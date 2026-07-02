@@ -214,13 +214,17 @@ fn assign_shares(metrics: &mut [AgentMetrics], win_keys: &[&str]) {
 }
 
 /// Converts an entire file into a sequence of EntryStat.
+/// Streams line by line so a multi-hundred-MB session JSONL is never held in memory whole.
 fn parse_file(path: &Path) -> Vec<EntryStat> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
     };
+    let reader = std::io::BufReader::new(file);
     let mut out = Vec::new();
-    for line in text.lines() {
-        let Some(e) = parse_line(line) else { continue };
+    for line in reader.lines() {
+        let Ok(line) = line else { break };
+        let Some(e) = parse_line(&line) else { continue };
         let Some(ts) = e
             .timestamp
             .as_deref()

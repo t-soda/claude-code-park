@@ -22,7 +22,9 @@ pub async fn get_session_timeline(
         let path = resolve_path(&projects_dir, &session_id, agent_id.as_deref())
             .ok_or_else(|| AppError::Other("session JSONL not found".into()))?;
         let mut tail = TailReader::new();
-        let entries = tail.read_new(&path); // A fresh TailReader starts at offset 0 = reads all lines
+        // A fresh TailReader starts at offset 0. Reads are capped inside read_new, so a huge
+        // session file yields only its tail — plenty for the 200-entry timeline limit.
+        let entries = tail.read_new(&path);
         Ok(build_timeline(&entries, LIMIT))
     })
     .await
