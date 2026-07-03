@@ -220,11 +220,20 @@ fn parse_file(path: &Path) -> Vec<EntryStat> {
     let Ok(file) = std::fs::File::open(path) else {
         return Vec::new();
     };
-    let reader = std::io::BufReader::new(file);
+    let mut reader = std::io::BufReader::new(file);
     let mut out = Vec::new();
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
-        let Some(e) = parse_line(&line) else { continue };
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        // Decode lossily like TailReader does: BufRead::lines() yields Err on an
+        // invalid-UTF-8 line, which would silently end the scan mid-file.
+        match reader.read_until(b'\n', &mut raw) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let Some(e) = parse_line(&String::from_utf8_lossy(&raw)) else {
+            continue;
+        };
         let Some(ts) = e
             .timestamp
             .as_deref()

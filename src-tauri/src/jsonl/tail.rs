@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 /// JSONL at startup restore, a timeline fetch, or a file that shrank and reset to 0)
 /// is read only from the tail, so a single file can never blow up memory.
 const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
-/// Upper bound when salvaging the file's first line for head metadata (entrypoint/cwd).
-const MAX_HEAD_LINE_BYTES: u64 = 256 * 1024;
+/// Upper bound on the head region scanned when salvaging session meta (entrypoint/cwd).
+const MAX_HEAD_SCAN_BYTES: u64 = 256 * 1024;
 
 /// A reader that incrementally reads append-only JSONL, retaining a byte offset.
 /// - A trailing segment not ending in a newline (a write in progress) is held until next time.
@@ -35,11 +35,18 @@ impl TailReader {
 
     /// Parses and returns the complete lines appended since the previous offset.
     pub fn read_new(&mut self, path: &Path) -> Vec<RawEntry> {
-        self.read_new_capped(path, MAX_READ_BYTES)
+        self.read_new_capped(path, MAX_READ_BYTES, true)
     }
 
-    /// read_new with an explicit cap (separated out for tests).
-    fn read_new_capped(&mut self, path: &Path, cap: u64) -> Vec<RawEntry> {
+    /// Reads only the newest complete lines within `cap` bytes, without the head-meta
+    /// salvage. For consumers that want a recent slice rather than a faithful restore
+    /// (the timeline: a months-old salvaged first line must not appear as a row).
+    pub fn read_tail(&mut self, path: &Path, cap: u64) -> Vec<RawEntry> {
+        self.read_new_capped(path, cap, false)
+    }
+
+    /// read_new with an explicit cap and head-salvage switch (also exercised directly by tests).
+    fn read_new_capped(&mut self, path: &Path, cap: u64, salvage_head: bool) -> Vec<RawEntry> {
         let mut entries = Vec::new();
         let mut file = match File::open(path) {
             Ok(f) => f,
@@ -58,12 +65,12 @@ impl TailReader {
             return entries;
         }
         // Cap the read: parse only the tail of an oversized unread region. When this skips
-        // the file head on a first read, salvage just the first line — it carries session
-        // meta (entrypoint/cwd) that only appears there.
+        // the file head on a first read, salvage session meta (entrypoint/cwd) from the
+        // head — it only appears in the first few lines.
         let mut skip_partial = false;
         if len - offset > cap {
-            if offset == 0 {
-                if let Some(head) = read_first_line(&mut file) {
+            if salvage_head && offset == 0 {
+                if let Some(head) = read_head_meta(&mut file, len - cap) {
                     entries.push(head);
                 }
             }
@@ -121,13 +128,27 @@ fn starts_at_line_boundary(file: &mut File, offset: u64) -> bool {
         && b[0] == b'\n'
 }
 
-/// Reads and parses only the file's first line (bounded; None if it can't be determined).
-fn read_first_line(file: &mut File) -> Option<RawEntry> {
+/// Scans the file's head (bounded, complete lines only) and salvages session meta: the
+/// first entry carrying entrypoint/cwd, else the first parseable line. Resumed sessions
+/// can start with summary lines that carry no meta, so reading only the literal first
+/// line would lose the entrypoint (and misclassify sdk-cli sessions as displayable).
+/// `limit` also stops the scan before the tail region so no entry is returned twice.
+fn read_head_meta(file: &mut File, limit: u64) -> Option<RawEntry> {
     file.seek(SeekFrom::Start(0)).ok()?;
     let mut buf = Vec::new();
-    file.take(MAX_HEAD_LINE_BYTES).read_to_end(&mut buf).ok()?;
-    let end = buf.iter().position(|&b| b == b'\n')?;
-    parse_line(&String::from_utf8_lossy(&buf[..end]))
+    file.take(MAX_HEAD_SCAN_BYTES.min(limit))
+        .read_to_end(&mut buf)
+        .ok()?;
+    let end = buf.iter().rposition(|&b| b == b'\n')?;
+    let mut fallback = None;
+    for line in String::from_utf8_lossy(&buf[..end]).lines() {
+        let Some(e) = parse_line(line) else { continue };
+        if e.entrypoint.is_some() || e.cwd.is_some() {
+            return Some(e);
+        }
+        fallback.get_or_insert(e);
+    }
+    fallback
 }
 
 #[cfg(test)]
@@ -162,7 +183,7 @@ mod tests {
         // Cap so that only the last line fits (+1 to include its trailing newline region).
         let cap = tail_line.len() as u64 + 1;
         let mut r = TailReader::new();
-        let entries = r.read_new_capped(&path, cap);
+        let entries = r.read_new_capped(&path, cap, true);
 
         // head (salvaged) + tail line. The middle line is skipped by the cap.
         assert_eq!(entries.len(), 2, "expected head meta + tail line, got {}", entries.len());
@@ -174,7 +195,7 @@ mod tests {
         let extra = line("2026-01-01T00:00:03.000Z", "");
         let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(f, "{extra}").unwrap();
-        let more = r.read_new_capped(&path, cap);
+        let more = r.read_new_capped(&path, cap, true);
         assert_eq!(more.len(), 1);
         assert_eq!(more[0].timestamp.as_deref(), Some("2026-01-01T00:00:03.000Z"));
 
@@ -193,9 +214,48 @@ mod tests {
         // so just the salvaged head line comes back.
         let cap = (b.len() / 2) as u64;
         let mut r = TailReader::new();
-        let entries = r.read_new_capped(&path, cap);
+        let entries = r.read_new_capped(&path, cap, true);
         assert_eq!(entries.len(), 1, "only the salvaged first line should be returned");
         assert_eq!(entries[0].timestamp.as_deref(), Some("2026-01-01T00:00:00.000Z"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The head salvage scans past meta-less leading lines (a resumed session starts
+    /// with summary lines; entrypoint/cwd sit on a later line).
+    #[test]
+    fn capped_read_salvages_meta_beyond_first_line() {
+        let summary = r#"{"type":"summary","summary":"earlier work"}"#;
+        let meta = line("2026-01-01T00:00:00.000Z", r#","entrypoint":"sdk-cli","cwd":"/proj""#);
+        let tail_line = line("2026-01-01T00:00:02.000Z", "");
+        let content = format!("{summary}\n{meta}\n{tail_line}\n");
+        let path = tmp_file("headscan", &content);
+
+        let cap = tail_line.len() as u64 + 1;
+        let mut r = TailReader::new();
+        let entries = r.read_new_capped(&path, cap, true);
+
+        assert_eq!(entries.len(), 2, "meta entry (salvaged) + tail line");
+        assert_eq!(entries[0].entrypoint.as_deref(), Some("sdk-cli"));
+        assert_eq!(entries[0].cwd.as_deref(), Some("/proj"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// read_tail returns only the recent window, without the head-meta salvage.
+    #[test]
+    fn read_tail_skips_head_salvage() {
+        let head = line("2026-01-01T00:00:00.000Z", r#","entrypoint":"sdk-cli","cwd":"/proj""#);
+        let tail_line = line("2026-01-01T00:00:02.000Z", "");
+        let content = format!("{head}\n{tail_line}\n");
+        let path = tmp_file("noheadmeta", &content);
+
+        let cap = tail_line.len() as u64 + 1;
+        let mut r = TailReader::new();
+        let entries = r.read_tail(&path, cap);
+
+        assert_eq!(entries.len(), 1, "no salvaged head row");
+        assert_eq!(entries[0].timestamp.as_deref(), Some("2026-01-01T00:00:02.000Z"));
 
         let _ = std::fs::remove_file(&path);
     }
