@@ -71,6 +71,21 @@ export const en: Messages = {
     languageLabel: "Display language",
   },
 
+  update: {
+    available: "A new version {version} is available",
+    updateNow: "Update now",
+    later: "Later",
+    downloading: "Downloading update…",
+    downloadingPct: "Downloading update… {percent}%",
+    restarting: "Restarting to apply the update…",
+    section: "Updates",
+    currentVersion: "Current version: {version}",
+    checkNow: "Check for updates",
+    checking: "Checking…",
+    upToDate: "You're up to date",
+    checkError: "Failed to check for updates: {error}",
+  },
+
   hooks: {
     description:
       "hooks in settings.json. Equivalent to Agent training / business rules. Applied immediately on save (existing keys preserved).",

@@ -71,6 +71,21 @@ export const zh: Messages = {
     languageLabel: "显示语言",
   },
 
+  update: {
+    available: "新版本 {version} 可用",
+    updateNow: "立即更新",
+    later: "稍后",
+    downloading: "正在下载更新…",
+    downloadingPct: "正在下载更新… {percent}%",
+    restarting: "正在重启以应用更新…",
+    section: "更新",
+    currentVersion: "当前版本：{version}",
+    checkNow: "检查更新",
+    checking: "检查中…",
+    upToDate: "已是最新版本",
+    checkError: "检查更新失败：{error}",
+  },
+
   hooks: {
     description:
       "settings.json 的 hooks。相当于 Agent 培训・业务规则。保存后立即生效（保留现有键）。",

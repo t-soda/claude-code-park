@@ -1,4 +1,7 @@
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useUiPrefsStore } from "../stores/uiPrefsStore";
+import { useUpdateStore } from "../stores/updateStore";
 import { CharacterEditor } from "./CharacterEditor";
 import { useT, useI18nStore, LOCALES, LOCALE_LABELS, isLocale } from "../i18n";
 
@@ -61,6 +64,60 @@ export function Settings() {
       <div className="card">
         <div className="title">{t("settings.characterEditor")}</div>
         <CharacterEditor />
+      </div>
+
+      <UpdateCard />
+    </div>
+  );
+}
+
+/** "Updates" card: shows the running version and drives the in-app updater. */
+function UpdateCard() {
+  const t = useT();
+  const status = useUpdateStore((s) => s.status);
+  const version = useUpdateStore((s) => s.version);
+  const progress = useUpdateStore((s) => s.progress);
+  const error = useUpdateStore((s) => s.error);
+  const checkForUpdate = useUpdateStore((s) => s.checkForUpdate);
+  const installAndRelaunch = useUpdateStore((s) => s.installAndRelaunch);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  return (
+    <div className="card">
+      <div className="title">{t("update.section")}</div>
+      <div className="sub" style={{ marginTop: 8 }}>
+        {t("update.currentVersion", { version: appVersion ?? "…" })}
+      </div>
+      <div className="row-actions" style={{ marginTop: 8 }}>
+        {status === "available" ? (
+          <button className="btn" onClick={installAndRelaunch}>
+            {t("update.updateNow")}
+          </button>
+        ) : (
+          <button
+            className="btn secondary"
+            disabled={status === "checking" || status === "downloading" || status === "installed"}
+            onClick={() => checkForUpdate()}
+          >
+            {status === "checking" ? t("update.checking") : t("update.checkNow")}
+          </button>
+        )}
+        <span className="sub">
+          {status === "upToDate" && t("update.upToDate")}
+          {status === "available" && t("update.available", { version: version ?? "?" })}
+          {status === "downloading" &&
+            (progress != null
+              ? t("update.downloadingPct", { percent: progress })
+              : t("update.downloading"))}
+          {status === "installed" && t("update.restarting")}
+          {status === "error" && (
+            <span className="err">{t("update.checkError", { error: error ?? "" })}</span>
+          )}
+        </span>
       </div>
     </div>
   );

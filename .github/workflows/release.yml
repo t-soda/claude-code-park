@@ -42,7 +42,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No signing/notarization (free distribution). Tauri ad-hoc signs automatically.
+          # No Apple signing/notarization (free distribution). Tauri ad-hoc signs automatically.
+          # Signs the updater artifacts (.app.tar.gz) so installed apps can verify in-app updates.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # Build a single .dmg for both Intel and Apple Silicon.
           args: --target universal-apple-darwin
@@ -61,5 +64,8 @@ jobs:
                  ```
 
             ⚠️ This app reads and visualizes `~/.claude/`, so it assumes macOS with Claude Code installed.
+          # The in-app updater reads /releases/latest/download/latest.json, and GitHub
+          # excludes drafts from "latest" — updates reach users only after the draft is
+          # manually published on GitHub. Publishing the draft IS the release switch.
           releaseDraft: true
           prerelease: false
