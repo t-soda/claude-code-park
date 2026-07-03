@@ -76,6 +76,21 @@ body,
   position: relative;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 24px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.update-banner .btn {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
 .office-wrap {
   position: relative;
   width: 100%;

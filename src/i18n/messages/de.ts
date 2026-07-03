@@ -71,6 +71,21 @@ export const de: Messages = {
     languageLabel: "Anzeigesprache",
   },
 
+  update: {
+    available: "Eine neue Version {version} ist verfügbar",
+    updateNow: "Jetzt aktualisieren",
+    later: "Später",
+    downloading: "Update wird heruntergeladen…",
+    downloadingPct: "Update wird heruntergeladen… {percent}%",
+    restarting: "Neustart, um das Update anzuwenden…",
+    section: "Updates",
+    currentVersion: "Aktuelle Version: {version}",
+    checkNow: "Nach Updates suchen",
+    checking: "Wird geprüft…",
+    upToDate: "Du bist auf dem neuesten Stand",
+    checkError: "Update-Prüfung fehlgeschlagen: {error}",
+  },
+
   hooks: {
     description:
       "hooks in settings.json. Entspricht Agent-Schulung und Geschäftsregeln. Wird beim Speichern sofort übernommen (vorhandene Schlüssel bleiben erhalten).",

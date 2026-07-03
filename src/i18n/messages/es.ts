@@ -73,6 +73,21 @@ export const es: Messages = {
     languageLabel: "Idioma de visualización",
   },
 
+  update: {
+    available: "Hay una nueva versión {version} disponible",
+    updateNow: "Actualizar ahora",
+    later: "Más tarde",
+    downloading: "Descargando la actualización…",
+    downloadingPct: "Descargando la actualización… {percent}%",
+    restarting: "Reiniciando para aplicar la actualización…",
+    section: "Actualizaciones",
+    currentVersion: "Versión actual: {version}",
+    checkNow: "Buscar actualizaciones",
+    checking: "Comprobando…",
+    upToDate: "Estás al día",
+    checkError: "No se pudo comprobar si hay actualizaciones: {error}",
+  },
+
   hooks: {
     description:
       "Hooks de settings.json. Equivalen a la formación del Agent y a las reglas de trabajo. Se aplican al guardar (las claves existentes se conservan).",

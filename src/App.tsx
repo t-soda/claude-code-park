@@ -9,6 +9,8 @@ import { HooksManager } from "./components/HooksManager";
 import { SkillsManager } from "./components/SkillsManager";
 import { Settings } from "./components/Settings";
 import { MetricsDashboard } from "./components/MetricsDashboard";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { useUpdateStore } from "./stores/updateStore";
 import { useT } from "./i18n";
 
 type Tab = "office" | "metrics" | "agents" | "hooks" | "skills" | "settings";
@@ -43,6 +45,8 @@ export function App() {
     // Project-scoped config and effective hooks also follow CLI-side changes live (incl. project .claude).
     watchScoped();
     watchEffective();
+    // Silently check GitHub Releases for a newer version (shows a banner only if one exists).
+    useUpdateStore.getState().checkForUpdate({ silent: true });
   }, [start, loadConfig, watchConfig, watchScoped, watchEffective]);
 
   return (
@@ -63,6 +67,7 @@ export function App() {
           </button>
         ))}
       </div>
+      <UpdateBanner />
       <div className="content">
         {tab === "office" && <OfficeView />}
         {tab === "metrics" && <MetricsDashboard />}

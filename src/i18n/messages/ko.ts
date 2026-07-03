@@ -71,6 +71,21 @@ export const ko: Messages = {
     languageLabel: "표시 언어",
   },
 
+  update: {
+    available: "새 버전 {version}을(를) 사용할 수 있습니다",
+    updateNow: "지금 업데이트",
+    later: "나중에",
+    downloading: "업데이트 다운로드 중…",
+    downloadingPct: "업데이트 다운로드 중… {percent}%",
+    restarting: "업데이트 적용을 위해 다시 시작합니다…",
+    section: "업데이트",
+    currentVersion: "현재 버전: {version}",
+    checkNow: "업데이트 확인",
+    checking: "확인 중…",
+    upToDate: "최신 버전입니다",
+    checkError: "업데이트 확인에 실패했습니다: {error}",
+  },
+
   hooks: {
     description:
       "settings.json 의 hooks. Agent 교육・업무 규칙에 해당. 저장하면 즉시 반영(기존 키는 보존).",

@@ -72,6 +72,21 @@ export const fr: Messages = {
     languageLabel: "Langue d'affichage",
   },
 
+  update: {
+    available: "Une nouvelle version {version} est disponible",
+    updateNow: "Mettre à jour maintenant",
+    later: "Plus tard",
+    downloading: "Téléchargement de la mise à jour…",
+    downloadingPct: "Téléchargement de la mise à jour… {percent}%",
+    restarting: "Redémarrage pour appliquer la mise à jour…",
+    section: "Mises à jour",
+    currentVersion: "Version actuelle : {version}",
+    checkNow: "Rechercher des mises à jour",
+    checking: "Vérification…",
+    upToDate: "Vous êtes à jour",
+    checkError: "Échec de la vérification des mises à jour : {error}",
+  },
+
   hooks: {
     description:
       "hooks de settings.json. Équivalent à la formation des Agent et aux règles métier. Appliqué immédiatement à l'enregistrement (les clés existantes sont préservées).",

@@ -75,6 +75,21 @@ export const ja = {
     languageLabel: "表示言語",
   },
 
+  update: {
+    available: "新しいバージョン {version} が利用できます",
+    updateNow: "今すぐアップデート",
+    later: "後で",
+    downloading: "アップデートをダウンロード中…",
+    downloadingPct: "アップデートをダウンロード中… {percent}%",
+    restarting: "アップデートを適用して再起動します…",
+    section: "アップデート",
+    currentVersion: "現在のバージョン: {version}",
+    checkNow: "アップデートを確認",
+    checking: "確認中…",
+    upToDate: "最新の状態です",
+    checkError: "アップデートの確認に失敗しました: {error}",
+  },
+
   hooks: {
     description:
       "settings.json の hooks。Agent教育・業務ルールに相当。保存すると即反映（既存キーは保全）。",
