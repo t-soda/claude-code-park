@@ -5,9 +5,17 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+/// Upper bound on bytes materialized per read. A huge unread region (a large session
+/// JSONL at startup restore, a timeline fetch, or a file that shrank and reset to 0)
+/// is read only from the tail, so a single file can never blow up memory.
+const MAX_READ_BYTES: u64 = 16 * 1024 * 1024;
+/// Upper bound on the head region scanned when salvaging session meta (entrypoint/cwd).
+const MAX_HEAD_SCAN_BYTES: u64 = 256 * 1024;
+
 /// A reader that incrementally reads append-only JSONL, retaining a byte offset.
 /// - A trailing segment not ending in a newline (a write in progress) is held until next time.
 /// - If the file shrinks (rotation/recreation), the offset is reset.
+/// - A single read is capped at MAX_READ_BYTES (only the tail is parsed beyond that).
 #[derive(Default)]
 pub struct TailReader {
     offsets: HashMap<PathBuf, u64>,
@@ -27,6 +35,18 @@ impl TailReader {
 
     /// Parses and returns the complete lines appended since the previous offset.
     pub fn read_new(&mut self, path: &Path) -> Vec<RawEntry> {
+        self.read_new_capped(path, MAX_READ_BYTES, true)
+    }
+
+    /// Reads only the newest complete lines within `cap` bytes, without the head-meta
+    /// salvage. For consumers that want a recent slice rather than a faithful restore
+    /// (the timeline: a months-old salvaged first line must not appear as a row).
+    pub fn read_tail(&mut self, path: &Path, cap: u64) -> Vec<RawEntry> {
+        self.read_new_capped(path, cap, false)
+    }
+
+    /// read_new with an explicit cap and head-salvage switch (also exercised directly by tests).
+    fn read_new_capped(&mut self, path: &Path, cap: u64, salvage_head: bool) -> Vec<RawEntry> {
         let mut entries = Vec::new();
         let mut file = match File::open(path) {
             Ok(f) => f,
@@ -44,6 +64,21 @@ impl TailReader {
         if len == offset {
             return entries;
         }
+        // Cap the read: parse only the tail of an oversized unread region. When this skips
+        // the file head on a first read, salvage session meta (entrypoint/cwd) from the
+        // head — it only appears in the first few lines.
+        let mut skip_partial = false;
+        if len - offset > cap {
+            if salvage_head && offset == 0 {
+                if let Some(head) = read_head_meta(&mut file, len - cap) {
+                    entries.push(head);
+                }
+            }
+            offset = len - cap;
+            // Whether the seek landed mid-line: only when the previous byte isn't a newline
+            // (landing exactly on a line start must not drop that complete line).
+            skip_partial = !starts_at_line_boundary(&mut file, offset);
+        }
         if file.seek(SeekFrom::Start(offset)).is_err() {
             return entries;
         }
@@ -58,7 +93,17 @@ impl TailReader {
             None => 0, // no complete line yet
         };
         if complete_len > 0 {
-            let text = String::from_utf8_lossy(&buf[..complete_len]);
+            // When the read landed mid-line (capped), drop the leading partial line.
+            let start = if skip_partial {
+                buf[..complete_len]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map(|p| p + 1)
+                    .unwrap_or(complete_len)
+            } else {
+                0
+            };
+            let text = String::from_utf8_lossy(&buf[start..complete_len]);
             for line in text.lines() {
                 if let Some(e) = parse_line(line) {
                     entries.push(e);
@@ -68,5 +113,161 @@ impl TailReader {
         self.offsets
             .insert(path.to_path_buf(), offset + complete_len as u64);
         entries
+    }
+}
+
+/// Whether `offset` is the start of a line (= the byte before it is a newline).
+/// offset 0 is always a line start. On read failure, assume mid-line (safe side: skip).
+fn starts_at_line_boundary(file: &mut File, offset: u64) -> bool {
+    if offset == 0 {
+        return true;
+    }
+    let mut b = [0u8; 1];
+    file.seek(SeekFrom::Start(offset - 1)).is_ok()
+        && file.read_exact(&mut b).is_ok()
+        && b[0] == b'\n'
+}
+
+/// Scans the file's head (bounded, complete lines only) and salvages session meta: the
+/// first entry carrying entrypoint/cwd, else the first parseable line. Resumed sessions
+/// can start with summary lines that carry no meta, so reading only the literal first
+/// line would lose the entrypoint (and misclassify sdk-cli sessions as displayable).
+/// `limit` also stops the scan before the tail region so no entry is returned twice.
+fn read_head_meta(file: &mut File, limit: u64) -> Option<RawEntry> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut buf = Vec::new();
+    file.take(MAX_HEAD_SCAN_BYTES.min(limit))
+        .read_to_end(&mut buf)
+        .ok()?;
+    let end = buf.iter().rposition(|&b| b == b'\n')?;
+    let mut fallback = None;
+    for line in String::from_utf8_lossy(&buf[..end]).lines() {
+        let Some(e) = parse_line(line) else { continue };
+        if e.entrypoint.is_some() || e.cwd.is_some() {
+            return Some(e);
+        }
+        fallback.get_or_insert(e);
+    }
+    fallback
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn tmp_file(label: &str, content: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "claude_code_park_tail_test_{}_{}.jsonl",
+            label,
+            std::process::id()
+        ));
+        let mut f = File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    fn line(ts: &str, extra: &str) -> String {
+        format!(r#"{{"type":"user","timestamp":"{ts}"{extra},"message":{{"role":"user","content":"x"}}}}"#)
+    }
+
+    /// A read larger than the cap parses only the tail, but the first line (session meta) is salvaged.
+    #[test]
+    fn capped_read_keeps_head_meta_and_tail_lines() {
+        let head = line("2026-01-01T00:00:00.000Z", r#","entrypoint":"sdk-cli","cwd":"/proj""#);
+        let mid = line("2026-01-01T00:00:01.000Z", "");
+        let tail_line = line("2026-01-01T00:00:02.000Z", "");
+        let content = format!("{head}\n{mid}\n{tail_line}\n");
+        let path = tmp_file("capped", &content);
+
+        // Cap so that only the last line fits (+1 to include its trailing newline region).
+        let cap = tail_line.len() as u64 + 1;
+        let mut r = TailReader::new();
+        let entries = r.read_new_capped(&path, cap, true);
+
+        // head (salvaged) + tail line. The middle line is skipped by the cap.
+        assert_eq!(entries.len(), 2, "expected head meta + tail line, got {}", entries.len());
+        assert_eq!(entries[0].entrypoint.as_deref(), Some("sdk-cli"));
+        assert_eq!(entries[0].cwd.as_deref(), Some("/proj"));
+        assert_eq!(entries[1].timestamp.as_deref(), Some("2026-01-01T00:00:02.000Z"));
+
+        // Follow-up appends are read incrementally as usual.
+        let extra = line("2026-01-01T00:00:03.000Z", "");
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{extra}").unwrap();
+        let more = r.read_new_capped(&path, cap, true);
+        assert_eq!(more.len(), 1);
+        assert_eq!(more[0].timestamp.as_deref(), Some("2026-01-01T00:00:03.000Z"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A cap landing mid-line drops the leading partial line instead of mis-parsing it.
+    #[test]
+    fn capped_read_drops_leading_partial_line() {
+        let a = line("2026-01-01T00:00:00.000Z", "");
+        let b = line("2026-01-01T00:00:01.000Z", "");
+        let content = format!("{a}\n{b}\n");
+        let path = tmp_file("midline", &content);
+
+        // Cap cuts into the middle of line b -> only... nothing complete besides the partial,
+        // so just the salvaged head line comes back.
+        let cap = (b.len() / 2) as u64;
+        let mut r = TailReader::new();
+        let entries = r.read_new_capped(&path, cap, true);
+        assert_eq!(entries.len(), 1, "only the salvaged first line should be returned");
+        assert_eq!(entries[0].timestamp.as_deref(), Some("2026-01-01T00:00:00.000Z"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The head salvage scans past meta-less leading lines (a resumed session starts
+    /// with summary lines; entrypoint/cwd sit on a later line).
+    #[test]
+    fn capped_read_salvages_meta_beyond_first_line() {
+        let summary = r#"{"type":"summary","summary":"earlier work"}"#;
+        let meta = line("2026-01-01T00:00:00.000Z", r#","entrypoint":"sdk-cli","cwd":"/proj""#);
+        let tail_line = line("2026-01-01T00:00:02.000Z", "");
+        let content = format!("{summary}\n{meta}\n{tail_line}\n");
+        let path = tmp_file("headscan", &content);
+
+        let cap = tail_line.len() as u64 + 1;
+        let mut r = TailReader::new();
+        let entries = r.read_new_capped(&path, cap, true);
+
+        assert_eq!(entries.len(), 2, "meta entry (salvaged) + tail line");
+        assert_eq!(entries[0].entrypoint.as_deref(), Some("sdk-cli"));
+        assert_eq!(entries[0].cwd.as_deref(), Some("/proj"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// read_tail returns only the recent window, without the head-meta salvage.
+    #[test]
+    fn read_tail_skips_head_salvage() {
+        let head = line("2026-01-01T00:00:00.000Z", r#","entrypoint":"sdk-cli","cwd":"/proj""#);
+        let tail_line = line("2026-01-01T00:00:02.000Z", "");
+        let content = format!("{head}\n{tail_line}\n");
+        let path = tmp_file("noheadmeta", &content);
+
+        let cap = tail_line.len() as u64 + 1;
+        let mut r = TailReader::new();
+        let entries = r.read_tail(&path, cap);
+
+        assert_eq!(entries.len(), 1, "no salvaged head row");
+        assert_eq!(entries[0].timestamp.as_deref(), Some("2026-01-01T00:00:02.000Z"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An uncapped (small) read behaves as before: all lines, then incremental appends.
+    #[test]
+    fn small_read_returns_all_lines() {
+        let content = format!("{}\n{}\n", line("2026-01-01T00:00:00.000Z", ""), line("2026-01-01T00:00:01.000Z", ""));
+        let path = tmp_file("small", &content);
+        let mut r = TailReader::new();
+        let entries = r.read_new(&path);
+        assert_eq!(entries.len(), 2);
+        let _ = std::fs::remove_file(&path);
     }
 }

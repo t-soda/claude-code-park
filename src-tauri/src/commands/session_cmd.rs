@@ -17,12 +17,16 @@ pub async fn get_session_timeline(
     agent_id: Option<String>,
 ) -> AppResult<Vec<TimelineEntry>> {
     const LIMIT: usize = 200;
+    // Far more JSONL than LIMIT rows ever need, and keeps a click on a huge session cheap.
+    const READ_BYTES: u64 = 2 * 1024 * 1024;
     let projects_dir = state.paths.projects_dir();
     tauri::async_runtime::spawn_blocking(move || {
         let path = resolve_path(&projects_dir, &session_id, agent_id.as_deref())
             .ok_or_else(|| AppError::Other("session JSONL not found".into()))?;
         let mut tail = TailReader::new();
-        let entries = tail.read_new(&path); // A fresh TailReader starts at offset 0 = reads all lines
+        // A fresh TailReader starts at offset 0; read_tail returns the newest complete
+        // lines only, without the head-meta salvage (a stale first line is not a row).
+        let entries = tail.read_tail(&path, READ_BYTES);
         Ok(build_timeline(&entries, LIMIT))
     })
     .await
