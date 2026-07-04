@@ -215,6 +215,26 @@ describe("logRows / activeRowIndex", () => {
     ]);
   });
 
+  it("collapses consecutive TurnEnd rows from the double turn-boundary entries", () => {
+    const rows = logRows(
+      data([
+        ev(1000, "TurnEnd"), // turn_duration
+        ev(1001, "TurnEnd"), // stop_hook_summary
+        ev(2000, "UserPrompt"),
+        ev(3000, "TurnEnd"),
+        ev(3000, "SubagentStop", { agent_id: "A" }),
+        ev(3001, "SubagentStop", { agent_id: "A" }), // kept: not a TurnEnd pair
+      ])
+    );
+    expect(rows.map((r) => r.kind)).toEqual([
+      "TurnEnd",
+      "UserPrompt",
+      "TurnEnd",
+      "SubagentStop",
+      "SubagentStop",
+    ]);
+  });
+
   it("finds the last row at or before the playhead by binary search", () => {
     const rows = logRows(basicData());
     expect(activeRowIndex(rows, -1)).toBe(-1);

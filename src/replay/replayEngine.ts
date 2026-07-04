@@ -200,22 +200,33 @@ export function flashesFor(
 /**
  * The rows shown in the replay event log. Pre/PostToolUse are visual noise there
  * (the Activity row already names the tool and detail); the rest narrate the session.
+ * Consecutive TurnEnd rows collapse into one: a turn boundary writes two system
+ * entries (turn_duration and stop_hook_summary), which would otherwise show as
+ * duplicated "Turn end" lines.
  */
 export function logRows(data: ReplayData): ReplayEvent[] {
-  return data.events.filter((ev) => {
+  const rows: ReplayEvent[] = [];
+  for (const ev of data.events) {
     switch (ev.kind) {
       case "SessionStart":
       case "UserPrompt":
       case "SubagentSpawn":
       case "SubagentStop":
-      case "TurnEnd":
-        return true;
+        break;
+      case "TurnEnd": {
+        const prev = rows[rows.length - 1];
+        if (prev && prev.kind === "TurnEnd" && prev.agent_id === ev.agent_id) continue;
+        break;
+      }
       case "Activity":
-        return ev.tool_name !== null;
+        if (ev.tool_name === null) continue;
+        break;
       default:
-        return false;
+        continue;
     }
-  });
+    rows.push(ev);
+  }
+  return rows;
 }
 
 /** Index of the last log row at or before the playhead (-1 before the first row). Binary search. */
