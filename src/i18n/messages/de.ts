@@ -219,6 +219,34 @@ export const de: Messages = {
       "Führe Claude Code im Terminal aus, dann erscheint hier der Orchestrator und beginnt zu arbeiten.",
   },
 
+  replay: {
+    title: "Wiedergabe",
+    subtitle:
+      "Sitzungen in der Stadt wiedergeben. Bei einer laufenden Sitzung siehst du, was bisher geschah; bei einer beendeten die ganze Geschichte — in deinem Tempo.",
+    browser: {
+      empty: "Keine Sitzungen zum Abspielen (Anzeige der letzten 31 Tage).",
+      fetchError: "Sitzungsliste konnte nicht geladen werden: {error}",
+      statusActive: "Aktiv",
+      statusIdle: "Inaktiv",
+    },
+    player: {
+      back: "Zur Liste",
+      play: "Abspielen",
+      pause: "Pause",
+      follow: "▼ Folgen",
+      railsNote: "Hook-Schienen zeigen die aktuelle Konfiguration (keine Aufzeichnung der Sitzung)",
+      loadError: "Wiedergabe konnte nicht geladen werden: {error}",
+    },
+    log: {
+      title: "Ereignisprotokoll",
+      sessionStart: "🏢 Sitzungsstart",
+      userPrompt: "🧑‍💻 Prompt",
+      turnEnd: "🏁 Zugende",
+      subagentSpawn: "📣 Subagent gestartet",
+      subagentStop: "👋 Subagent beendet",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ Menü",
   },

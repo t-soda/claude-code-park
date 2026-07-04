@@ -792,3 +792,189 @@ body,
   z-index: 1000;
   pointer-events: none;
 }
+
+/* Replay tab */
+.replay-layout {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.replay-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.replay-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.replay-back {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.replay-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Flex items don't shrink below their content's intrinsic width by default;
+     without this, a long title pushes the back button/note instead of truncating. */
+  min-width: 0;
+}
+.replay-head-note {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.replay-stage-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.replay-play {
+  min-width: 40px;
+}
+.replay-clock {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.replay-scrubber {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+.replay-speed {
+  display: flex;
+  gap: 4px;
+}
+.replay-speed-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.replay-speed-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Session browser */
+.replay-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+}
+.replay-row-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.replay-row-project {
+  color: var(--accent-2);
+}
+.replay-row-branch {
+  color: var(--muted);
+}
+/* The clicked row while its replay data is loading. */
+.replay-row.opening {
+  opacity: 0.55;
+  cursor: progress;
+}
+/* A still-running session's badge in the browser (Ended sessions show none). */
+.replay-status-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.7em;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.replay-status-badge.status-active {
+  background: rgba(52, 211, 153, 0.18);
+  color: #34d399;
+}
+.replay-status-badge.status-idle {
+  background: rgba(139, 147, 167, 0.18);
+  color: var(--muted);
+}
+
+/* Synchronized event log */
+.replay-log {
+  flex: 0 0 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+.replay-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+}
+.replay-follow {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.replay-log-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px 8px 8px;
+}
+.replay-log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.replay-log-row:hover {
+  background: var(--panel-2);
+}
+.replay-log-row.active {
+  background: rgba(240, 136, 62, 0.14);
+}
+.replay-log-row.future {
+  opacity: 0.45;
+}

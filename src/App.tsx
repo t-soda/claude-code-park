@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { OfficeView } from "./office/OfficeView";
+import { ReplayView } from "./replay/ReplayView";
 import { useWorldStore } from "./stores/worldStore";
 import { useConfigStore } from "./stores/configStore";
 import { useScopedConfigStore } from "./stores/scopedConfigStore";
@@ -13,11 +14,12 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { useUpdateStore } from "./stores/updateStore";
 import { useT } from "./i18n";
 
-type Tab = "office" | "metrics" | "agents" | "hooks" | "skills" | "settings";
+type Tab = "office" | "replay" | "metrics" | "agents" | "hooks" | "skills" | "settings";
 
 // For labels without an i18n key (nav.*), use the fixed brand name as-is.
 const TABS: { id: Tab; label: string }[] = [
   { id: "office", label: "" },
+  { id: "replay", label: "Replay" },
   { id: "metrics", label: "Metrics" },
   { id: "agents", label: "Agent" },
   { id: "hooks", label: "Hooks" },
@@ -70,6 +72,7 @@ export function App() {
       <UpdateBanner />
       <div className="content">
         {tab === "office" && <OfficeView />}
+        {tab === "replay" && <ReplayView />}
         {tab === "metrics" && <MetricsDashboard />}
         {tab === "agents" && <AgentsManager />}
         {tab === "hooks" && <HooksManager />}
