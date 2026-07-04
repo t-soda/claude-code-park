@@ -334,7 +334,18 @@ pub fn status_from_last(last_event_at: Option<&str>, now: DateTime<Utc>) -> Sess
     let Ok(dt) = DateTime::parse_from_rfc3339(ts) else {
         return SessionStatus::Idle;
     };
-    let age = now.signed_duration_since(dt.with_timezone(&Utc)).num_seconds();
+    status_from_age_secs(now.signed_duration_since(dt.with_timezone(&Utc)).num_seconds())
+}
+
+/// Same thresholds as status_from_last, for callers that already have the last
+/// event time as epoch milliseconds (e.g. the replay pipeline, which never
+/// round-trips through an ISO string).
+pub fn status_from_epoch_ms(last_event_at_ms: f64, now: DateTime<Utc>) -> SessionStatus {
+    let age_secs = now.timestamp_millis() - last_event_at_ms as i64;
+    status_from_age_secs(age_secs / 1000)
+}
+
+fn status_from_age_secs(age: i64) -> SessionStatus {
     if age <= ACTIVE_SECS {
         SessionStatus::Active
     } else if age <= IDLE_SECS {

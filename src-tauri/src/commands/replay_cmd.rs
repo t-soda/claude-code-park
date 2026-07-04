@@ -2,7 +2,6 @@ use crate::error::{AppError, AppResult};
 use crate::jsonl::entry::RawEntry;
 use crate::jsonl::{for_each_entry, TailReader};
 use crate::model::replay::{ReplayData, ReplaySessionMeta};
-use crate::model::session::SessionStatus;
 use crate::pipeline::replay::{assemble, epoch_ms, excerpt, is_markup_prompt, ReplayBuilder, EXCERPT_CHARS};
 use crate::pipeline::session_tracker::status_from_last;
 use crate::pipeline::{route_path, Target};
@@ -28,7 +27,9 @@ const MAX_AGE_SECS: u64 = 31 * 24 * 3600;
 /// Upper bound on the number of sessions returned (newest first).
 const MAX_SESSIONS: usize = 200;
 
-/// Lists past (Ended) sessions available for replay, newest first.
+/// Lists sessions available for replay, newest (most recently active) first. Any
+/// status may appear: a still-running session is included so the user can review
+/// what it just did without waiting for it to go idle or end.
 /// Never reads whole files: only a bounded head scan plus a bounded tail read per file.
 #[tauri::command]
 pub async fn list_replay_sessions(state: State<'_, AppState>) -> AppResult<Vec<ReplaySessionMeta>> {
@@ -148,9 +149,9 @@ fn last_timestamp(path: &Path, cap: u64) -> Option<String> {
 }
 
 /// Builds the browser row from the bounded head/tail scan (pure; unit-tested).
-/// Returns None for sessions that must not be listed: sdk-cli launches, sessions
-/// without a parsable start timestamp, and sessions that are not Ended yet
-/// (live sessions stay exclusively in the office view).
+/// Returns None for sessions that must not be listed: sdk-cli launches, and
+/// sessions without a parsable start/last timestamp. Active/Idle sessions are
+/// listed like Ended ones — only their `status` field tells them apart.
 fn meta_from_scan(
     session_id: &str,
     head: &[RawEntry],
@@ -159,9 +160,6 @@ fn meta_from_scan(
 ) -> Option<ReplaySessionMeta> {
     let entrypoint = head.iter().find_map(|e| e.entrypoint.as_deref());
     if entrypoint == Some("sdk-cli") {
-        return None;
-    }
-    if status_from_last(last_ts, now) != SessionStatus::Ended || last_ts.is_none() {
         return None;
     }
     let started_at_ms = head
@@ -186,12 +184,14 @@ fn meta_from_scan(
             .map(|s| excerpt(s, EXCERPT_CHARS)),
         started_at_ms,
         ended_at_ms,
+        status: status_from_last(last_ts, now),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::session::SessionStatus;
     use chrono::TimeZone;
     use std::io::Write;
 
@@ -270,6 +270,7 @@ mod tests {
         assert_eq!(meta.slug.as_deref(), Some("fix-bug"));
         assert_eq!(meta.first_prompt.as_deref(), Some("fix the bug"));
         assert!(meta.ended_at_ms > meta.started_at_ms);
+        assert_eq!(meta.status, SessionStatus::Ended);
     }
 
     /// sdk-cli sessions (SDK/eval launches) are not listed.
@@ -281,14 +282,22 @@ mod tests {
         assert!(meta_from_scan("SID", &head, Some("2026-06-25T02:00:00.000Z"), long_after()).is_none());
     }
 
-    /// Sessions still Active/Idle are not listed (they belong to the office view).
+    /// A still-running session is listed too (so its history-so-far can be reviewed
+    /// without waiting for it to go idle or end), tagged with its live status.
     #[test]
-    fn excludes_non_ended() {
+    fn includes_active_and_idle_sessions_tagged_with_status() {
         let head = vec![
             e(r#"{"type":"user","timestamp":"2026-06-25T01:00:00.000Z","message":{"role":"user","content":"x"}}"#),
         ];
-        let now = Utc.with_ymd_and_hms(2026, 6, 25, 1, 5, 0).unwrap();
-        assert!(meta_from_scan("SID", &head, Some("2026-06-25T01:00:00.000Z"), now).is_none());
+        let active_now = Utc.with_ymd_and_hms(2026, 6, 25, 1, 1, 0).unwrap();
+        let active = meta_from_scan("SID", &head, Some("2026-06-25T01:00:00.000Z"), active_now)
+            .expect("still listed while Active");
+        assert_eq!(active.status, SessionStatus::Active);
+
+        let idle_now = Utc.with_ymd_and_hms(2026, 6, 25, 1, 10, 0).unwrap();
+        let idle = meta_from_scan("SID", &head, Some("2026-06-25T01:00:00.000Z"), idle_now)
+            .expect("still listed while Idle");
+        assert_eq!(idle.status, SessionStatus::Idle);
     }
 
     /// Slash-command/caveat markup is skipped for the title when a human prompt follows.

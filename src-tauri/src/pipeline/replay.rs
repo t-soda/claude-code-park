@@ -299,6 +299,7 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)
             first_prompt: main.first_prompt,
             started_at_ms,
             ended_at_ms,
+            status: super::session_tracker::status_from_epoch_ms(ended_at_ms, chrono::Utc::now()),
         },
         subagents,
         events,
@@ -411,6 +412,9 @@ mod tests {
         assert_eq!(data.meta.first_prompt.as_deref(), Some("fix the bug"));
         assert_eq!(data.meta.started_at_ms, epoch_ms(T0).unwrap());
         assert_eq!(data.meta.ended_at_ms, epoch_ms(T3).unwrap());
+        // These fixtures are long in the past, so assemble's status (computed
+        // against the real current time) must read as Ended.
+        assert_eq!(data.meta.status, crate::model::session::SessionStatus::Ended);
     }
 
     /// The Skill tool sets active_skill on subsequent Activity events.
@@ -552,5 +556,18 @@ mod tests {
     #[test]
     fn empty_main_returns_none() {
         assert!(assemble("SID", BuiltFile::default(), vec![]).is_none());
+    }
+
+    /// A still-running session (last event moments ago) is tagged Active by
+    /// assemble, not excluded — replay works on live sessions too.
+    #[test]
+    fn assemble_tags_a_recent_session_active() {
+        let now = chrono::Utc::now();
+        let ts = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let main = build_main(&[&format!(
+            r#"{{"type":"user","timestamp":"{ts}","message":{{"role":"user","content":"go"}}}}"#
+        )]);
+        let data = assemble("SID", main, vec![]).expect("assembles");
+        assert_eq!(data.meta.status, crate::model::session::SessionStatus::Active);
     }
 }

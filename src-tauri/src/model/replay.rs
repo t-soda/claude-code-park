@@ -1,8 +1,11 @@
 use super::activity::WorkKind;
+use super::session::SessionStatus;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// Summary of a past (ended) session shown in the replay session browser.
+/// Summary of a session shown in the replay session browser. Any status (Active/Idle/
+/// Ended) may appear: a still-running session can be replayed up to its most recent
+/// event, so the user doesn't have to wait for it to end to see what it just did.
 /// All times are epoch milliseconds as f64 (i64 would export as bigint via ts-rs,
 /// which is awkward for scrubber math on the frontend).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -16,7 +19,13 @@ pub struct ReplaySessionMeta {
     /// Excerpt of the first human prompt (used as a title when there is no slug).
     pub first_prompt: Option<String>,
     pub started_at_ms: f64,
+    /// Timestamp of the last event seen at list time. For a still-running session
+    /// this keeps advancing; opening the replay always re-reads the full file, so it
+    /// may show more than this snapshot implied.
     pub ended_at_ms: f64,
+    /// The session's status as of list time (Active/Idle/Ended), so the browser can
+    /// flag a still-running session instead of implying its history is complete.
+    pub status: SessionStatus,
 }
 
 /// A sub agent's clock-in/clock-out interval within a replayed session.
