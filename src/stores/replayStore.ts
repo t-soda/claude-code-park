@@ -12,6 +12,10 @@ import { pruneEvents, type HookFlash } from "./hookStore";
 
 /** Same badge lifetime as the live hookStore. */
 const FLASH_TTL_MS = 3_000;
+/** Caps a single tick's real-time delta so a paused rAF (backgrounded tab) resuming
+ * doesn't jump the playhead forward by the entire elapsed wall-clock gap. Generous
+ * enough to never clip a normal frame, even a stuttering one. */
+const MAX_TICK_DT_MS = 2_000;
 
 export type ReplaySpeed = 1 | 4 | 16;
 
@@ -66,7 +70,9 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       const list = await api.listReplaySessions();
       set({ list, listLoading: false });
     } catch (e) {
-      set({ listError: String(e), listLoading: false, list: [] });
+      // Keep a previously successful list rather than flipping a populated
+      // browser to "no sessions" on a transient refetch failure.
+      set({ listError: String(e), listLoading: false });
     }
   },
 
@@ -88,7 +94,19 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
       });
     } catch (e) {
       if (seq !== openSeq) return;
-      set({ dataError: String(e), dataLoading: false });
+      // Drop any stale previous session instead of silently continuing to
+      // operate on it while surfacing an error for the one that failed.
+      cursor = null;
+      lastRealMs = null;
+      set({
+        data: null,
+        dataError: String(e),
+        dataLoading: false,
+        playheadMs: 0,
+        playing: false,
+        frame: null,
+        flashes: {},
+      });
     }
   },
 
@@ -110,8 +128,10 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
   play() {
     const s = get();
     if (!s.data || !cursor) return;
+    const duration = durationMs(s.data);
+    if (duration <= 0) return; // nothing to animate
     // Replaying from the end starts over (natural "watch again").
-    if (s.playheadMs >= durationMs(s.data)) {
+    if (s.playheadMs >= duration) {
       set({ playheadMs: 0, frame: cursor.seek(0), flashes: {} });
     }
     set({ playing: true });
@@ -135,7 +155,8 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
 
   tick(nowRealMs) {
     const s = get();
-    const dtMs = lastRealMs === null ? 0 : nowRealMs - lastRealMs;
+    const dtMs =
+      lastRealMs === null ? 0 : Math.min(nowRealMs - lastRealMs, MAX_TICK_DT_MS);
     lastRealMs = nowRealMs;
     if (!s.data || !cursor) return;
 

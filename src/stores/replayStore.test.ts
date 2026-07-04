@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { ReplayData, ReplayEvent, ReplayEventKind } from "../bindings";
+import type { ReplayData } from "../bindings";
+import { ev } from "../replay/testFixtures";
 
 // Mock the Tauri IPC to verify only the store's playback behavior.
 const listReplaySessions = vi.fn();
@@ -12,22 +13,6 @@ vi.mock("../ipc/commands", () => ({
 }));
 
 import { useReplayStore } from "./replayStore";
-
-function ev(at_ms: number, kind: ReplayEventKind, over: Partial<ReplayEvent> = {}): ReplayEvent {
-  return {
-    at_ms,
-    kind,
-    agent_id: null,
-    work: null,
-    tool_name: null,
-    detail: null,
-    active_skill: null,
-    correlation_id: null,
-    is_error: null,
-    text: null,
-    ...over,
-  };
-}
 
 /** A 10-second session: prompt at 0, Read at 5s, turn end at 10s. */
 function fixture(): ReplayData {
@@ -61,7 +46,7 @@ beforeEach(() => {
   listReplaySessions.mockReset();
   getReplayData.mockReset();
   useReplayStore.getState().close();
-  useReplayStore.setState({ list: null, listLoading: false, listError: null });
+  useReplayStore.setState({ list: null, listLoading: false, listError: null, speed: 1 });
 });
 
 describe("replayStore.open", () => {
@@ -165,10 +150,67 @@ describe("replayStore.loadList", () => {
     expect(useReplayStore.getState().list).toHaveLength(1);
 
     listReplaySessions.mockRejectedValue(new Error("boom"));
-    useReplayStore.setState({ list: null });
     await useReplayStore.getState().loadList();
     const s = useReplayStore.getState();
     expect(s.listError).toContain("boom");
-    expect(s.list).toEqual([]);
+    // A previously successful list must survive a later transient failure instead
+    // of the browser flipping from "sessions available" to "no sessions".
+    expect(s.list).toHaveLength(1);
+  });
+
+  it("leaves list null (not []) when the very first fetch fails", async () => {
+    listReplaySessions.mockRejectedValue(new Error("boom"));
+    await useReplayStore.getState().loadList();
+    const s = useReplayStore.getState();
+    expect(s.listError).toContain("boom");
+    expect(s.list).toBeNull();
+  });
+});
+
+describe("replayStore.open failure", () => {
+  it("clears any stale previous session instead of leaving it live under an error", async () => {
+    await openFixture();
+    expect(useReplayStore.getState().data?.meta.session_id).toBe("SID");
+
+    getReplayData.mockRejectedValue(new Error("not found"));
+    await useReplayStore.getState().open("OTHER");
+    const s = useReplayStore.getState();
+    expect(s.dataError).toContain("not found");
+    expect(s.data).toBeNull();
+    expect(s.frame).toBeNull();
+  });
+});
+
+describe("replayStore.play", () => {
+  it("does nothing for a zero-duration session instead of flickering playing on/off", async () => {
+    getReplayData.mockResolvedValue({
+      meta: {
+        session_id: "SID",
+        project: "/home/u/proj",
+        slug: null,
+        git_branch: null,
+        first_prompt: "go",
+        started_at_ms: 1_000_000,
+        ended_at_ms: 1_000_000,
+      },
+      subagents: [],
+      events: [ev(0, "SessionStart")],
+    } satisfies ReplayData);
+    await useReplayStore.getState().open("SID");
+    useReplayStore.getState().play();
+    expect(useReplayStore.getState().playing).toBe(false);
+  });
+});
+
+describe("replayStore.tick dt clamp", () => {
+  it("caps a single tick's advance so a paused/backgrounded gap doesn't jump the playhead", async () => {
+    await openFixture();
+    useReplayStore.getState().tick(1000); // baseline
+    useReplayStore.getState().play();
+    // Simulate a large real-time gap (e.g. a backgrounded tab pausing the ticker
+    // for a minute) resolving in one tick call.
+    useReplayStore.getState().tick(1000 + 60_000);
+    // Clamped to MAX_TICK_DT_MS (2000ms) at 1x speed, not the full 60s gap.
+    expect(useReplayStore.getState().playheadMs).toBe(2000);
   });
 });

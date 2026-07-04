@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { ReplayData, ReplayEvent, ReplayEventKind } from "../bindings";
+import type { ReplayData, ReplayEvent } from "../bindings";
 import {
   LINGER_MS,
   activeRowIndex,
@@ -8,22 +8,7 @@ import {
   flashesFor,
   logRows,
 } from "./replayEngine";
-
-function ev(at_ms: number, kind: ReplayEventKind, over: Partial<ReplayEvent> = {}): ReplayEvent {
-  return {
-    at_ms,
-    kind,
-    agent_id: null,
-    work: null,
-    tool_name: null,
-    detail: null,
-    active_skill: null,
-    correlation_id: null,
-    is_error: null,
-    text: null,
-    ...over,
-  };
-}
+import { ev } from "./testFixtures";
 
 function data(events: ReplayEvent[], subagents: ReplayData["subagents"] = []): ReplayData {
   const last = events.length > 0 ? events[events.length - 1].at_ms : 0;
@@ -150,6 +135,30 @@ describe("createReplayCursor", () => {
     expect(back.frame.sessions[0].current.kind).toBe("Thinking");
   });
 
+  it("clears a subagent's activity to Idle on SubagentStop instead of lingering on its last tool", () => {
+    const sub = {
+      agent_id: "A",
+      subagent_type: "reviewer",
+      description: null,
+      model: null,
+      spawn_ms: 0,
+      stop_ms: 3000,
+    };
+    const cursor = createReplayCursor(
+      data(
+        [
+          ev(0, "SubagentSpawn"),
+          ev(1000, "Activity", { agent_id: "A", work: "Running", tool_name: "Bash" }),
+          ev(3000, "SubagentStop", { agent_id: "A" }),
+        ],
+        [sub]
+      )
+    );
+    const during = cursor.seek(3000 + 1).sessions[0].subagents[0].current;
+    expect(during.kind).toBe("Idle");
+    expect(during.tool_name).toBeNull();
+  });
+
   it("rebuilds the frame when only a linger window expires (no event crossed)", () => {
     const sub = {
       agent_id: "A",
@@ -233,6 +242,20 @@ describe("logRows / activeRowIndex", () => {
       "SubagentStop",
       "SubagentStop",
     ]);
+  });
+
+  it("still collapses the TurnEnd pair when a same-instant SubagentStop sorts between them", () => {
+    // A regression case: an unrelated subagent's SubagentStop happens to land between
+    // the turn boundary's two TurnEnd entries after the at_ms stable sort, which used
+    // to defeat a "check the immediately preceding row" dedup.
+    const rows = logRows(
+      data([
+        ev(1000, "TurnEnd"), // turn_duration
+        ev(1000, "SubagentStop", { agent_id: "A" }),
+        ev(1001, "TurnEnd"), // stop_hook_summary
+      ])
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["TurnEnd", "SubagentStop"]);
   });
 
   it("finds the last row at or before the playhead by binary search", () => {

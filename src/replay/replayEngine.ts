@@ -16,8 +16,6 @@ export const LINGER_MS = 1_500;
 /** A synthesized world snapshot at one playhead position. */
 export interface ReplayFrame {
   sessions: Session[];
-  /** Bumped on every rebuild; advance() reuses the previous frame (same reference) when nothing changed. */
-  version: number;
 }
 
 /**
@@ -71,9 +69,15 @@ export function createReplayCursor(data: ReplayData): ReplayCursor {
   let playhead = -1;
   let orch: ActivityState = IDLE;
   const agentState = new Map<string, ActivityState>();
-  let frame: ReplayFrame = { sessions: [], version: 0 };
+  let frame: ReplayFrame = { sessions: [] };
 
   function applyEvent(ev: ReplayEvent): void {
+    // A stopped subagent's last activity must not linger, showing "still running
+    // Bash" for the whole despawn window after it has actually stopped.
+    if (ev.kind === "SubagentStop") {
+      if (ev.agent_id !== null) agentState.set(ev.agent_id, IDLE);
+      return;
+    }
     if (ev.kind !== "Activity") return;
     if (ev.agent_id === null) {
       orch = activityFrom(ev);
@@ -112,7 +116,7 @@ export function createReplayCursor(data: ReplayData): ReplayCursor {
       is_main: true,
       subagents: runs,
     };
-    return { sessions: [session], version: frame.version + 1 };
+    return { sessions: [session] };
   }
 
   function seek(tMs: number): ReplayFrame {
@@ -200,24 +204,31 @@ export function flashesFor(
 /**
  * The rows shown in the replay event log. Pre/PostToolUse are visual noise there
  * (the Activity row already names the tool and detail); the rest narrate the session.
- * Consecutive TurnEnd rows collapse into one: a turn boundary writes two system
- * entries (turn_duration and stop_hook_summary), which would otherwise show as
- * duplicated "Turn end" lines.
+ * A turn boundary writes two TurnEnd entries close together in time (turn_duration
+ * and stop_hook_summary), which would otherwise show as duplicated "Turn end" lines;
+ * only the first is kept, tracked by "has a TurnEnd already been kept for the current
+ * turn" (reset on the next UserPrompt, the only event that starts a new turn) rather
+ * than by adjacency in `rows` — an unrelated subagent's same-instant SubagentStop can
+ * otherwise sort between the pair and defeat a simple "previous row" check. TurnEnd is
+ * only ever emitted for the orchestrator (agent_id null); subagents never re-open a
+ * turn without an intervening UserPrompt, so resetting on UserPrompt alone is safe.
  */
 export function logRows(data: ReplayData): ReplayEvent[] {
   const rows: ReplayEvent[] = [];
+  let turnEndKept = false;
   for (const ev of data.events) {
     switch (ev.kind) {
       case "SessionStart":
-      case "UserPrompt":
       case "SubagentSpawn":
       case "SubagentStop":
         break;
-      case "TurnEnd": {
-        const prev = rows[rows.length - 1];
-        if (prev && prev.kind === "TurnEnd" && prev.agent_id === ev.agent_id) continue;
+      case "UserPrompt":
+        turnEndKept = false;
         break;
-      }
+      case "TurnEnd":
+        if (turnEndKept) continue;
+        turnEndKept = true;
+        break;
       case "Activity":
         if (ev.tool_name === null) continue;
         break;
