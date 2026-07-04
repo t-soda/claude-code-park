@@ -3,7 +3,7 @@ use crate::jsonl::entry::RawEntry;
 use crate::jsonl::{for_each_entry, TailReader};
 use crate::model::replay::{ReplayData, ReplaySessionMeta};
 use crate::model::session::SessionStatus;
-use crate::pipeline::replay::{assemble, epoch_ms, is_markup_prompt, ReplayBuilder};
+use crate::pipeline::replay::{assemble, epoch_ms, excerpt, is_markup_prompt, ReplayBuilder, EXCERPT_CHARS};
 use crate::pipeline::session_tracker::status_from_last;
 use crate::pipeline::{route_path, Target};
 use crate::state::AppState;
@@ -11,9 +11,10 @@ use chrono::{DateTime, Utc};
 use std::path::Path;
 use tauri::State;
 
-/// How many head lines are scanned per file for session meta (cwd/slug/entrypoint/
-/// first prompt all appear within the first few lines).
-const HEAD_LINES: usize = 50;
+/// Byte budget scanned per file for session meta (cwd/slug/entrypoint/first prompt
+/// all appear within the first few lines; a resumed session can start with many
+/// meta-less summary lines, so this is a byte budget rather than a line count).
+const HEAD_BYTES: u64 = 256 * 1024;
 /// Tail window read per file to find the last event timestamp.
 const TAIL_BYTES: u64 = 64 * 1024;
 /// Only sessions modified within this window are listed (bounds the scan cost;
@@ -45,12 +46,11 @@ pub async fn list_replay_sessions(state: State<'_, AppState>) -> AppResult<Vec<R
             if !recent {
                 continue;
             }
-            let head = read_head(&path, HEAD_LINES);
-            let last_ts = TailReader::new()
-                .read_tail(&path, TAIL_BYTES)
-                .iter()
-                .rev()
-                .find_map(|e| e.timestamp.clone());
+            let head = read_head(&path, HEAD_BYTES);
+            // If the tail window lands entirely inside one oversized last line (a huge
+            // final tool_result), the capped read yields nothing; fall back to an
+            // uncapped read for that rare case rather than dropping the session.
+            let last_ts = last_timestamp(&path, TAIL_BYTES).or_else(|| last_timestamp(&path, u64::MAX));
             if let Some(meta) = meta_from_scan(&session_id, &head, last_ts.as_deref(), now) {
                 out.push(meta);
             }
@@ -82,9 +82,14 @@ pub async fn get_replay_data(state: State<'_, AppState>, session_id: String) -> 
             session_id
         );
         for sub_path in glob::glob(&sub_pattern).into_iter().flatten().flatten() {
-            let Some(Target::Sub { agent_id, .. }) = route_path(&projects_dir, &sub_path) else {
+            let Some(Target::Sub { parent_id, agent_id }) = route_path(&projects_dir, &sub_path) else {
                 continue;
             };
+            // The glob pattern embeds session_id verbatim; route_path's own parse of the
+            // path is the source of truth for which session a match actually belongs to.
+            if parent_id != session_id {
+                continue;
+            }
             let mut builder = ReplayBuilder::new_sub(&agent_id);
             for_each_entry(&sub_path, |e| builder.push(e));
             subs.push((agent_id, builder.finish()));
@@ -97,9 +102,11 @@ pub async fn get_replay_data(state: State<'_, AppState>, session_id: String) -> 
     .map_err(|e| AppError::Other(format!("replay data task failed: {e}")))?
 }
 
-/// Parses the first `limit` lines of a JSONL file and stops reading there,
-/// so listing never streams a whole multi-hundred-MB transcript.
-fn read_head(path: &Path, limit: usize) -> Vec<RawEntry> {
+/// Parses complete lines from the start of a JSONL file up to `byte_budget` and stops
+/// there, so listing never streams a whole multi-hundred-MB transcript. A byte budget
+/// (rather than a line count) matters for resumed sessions, which can start with many
+/// meta-less summary lines before the first entry carrying entrypoint/cwd.
+fn read_head(path: &Path, byte_budget: u64) -> Vec<RawEntry> {
     use std::io::BufRead;
     let mut head = Vec::new();
     let Ok(file) = std::fs::File::open(path) else {
@@ -107,17 +114,31 @@ fn read_head(path: &Path, limit: usize) -> Vec<RawEntry> {
     };
     let mut reader = std::io::BufReader::new(file);
     let mut raw = Vec::new();
-    for _ in 0..limit {
+    let mut consumed = 0u64;
+    loop {
         raw.clear();
-        match reader.read_until(b'\n', &mut raw) {
+        let n = match reader.read_until(b'\n', &mut raw) {
             Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
+            Ok(n) => n,
+        };
         if let Some(e) = crate::jsonl::parse::parse_line(&String::from_utf8_lossy(&raw)) {
             head.push(e);
         }
+        consumed += n as u64;
+        if consumed >= byte_budget {
+            break;
+        }
     }
     head
+}
+
+/// Finds the last event timestamp within `cap` bytes read from the file's tail.
+fn last_timestamp(path: &Path, cap: u64) -> Option<String> {
+    TailReader::new()
+        .read_tail(path, cap)
+        .iter()
+        .rev()
+        .find_map(|e| e.timestamp.clone())
 }
 
 /// Builds the browser row from the bounded head/tail scan (pure; unit-tested).
@@ -156,7 +177,7 @@ fn meta_from_scan(
             .filter_map(|e| e.user_prompt_text())
             .find(|s| !is_markup_prompt(s))
             .or_else(|| head.iter().find_map(|e| e.user_prompt_text()))
-            .map(|s| s.chars().take(200).collect()),
+            .map(|s| excerpt(s, EXCERPT_CHARS)),
         started_at_ms,
         ended_at_ms,
     })
@@ -166,6 +187,7 @@ fn meta_from_scan(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::io::Write;
 
     fn e(json: &str) -> RawEntry {
         serde_json::from_str(json).expect("fixture should parse")
@@ -174,6 +196,59 @@ mod tests {
     /// `now` far enough after the last event that status_from_last says Ended.
     fn long_after() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 6, 26, 0, 0, 0).unwrap()
+    }
+
+    fn tmp_jsonl(label: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "claude_code_park_replay_cmd_test_{}_{}.jsonl",
+            label,
+            std::process::id()
+        ));
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    /// When the tail window (TAIL_BYTES cap) lands entirely inside one oversized last
+    /// line, the capped read finds no timestamp; the uncapped fallback must still find it.
+    #[test]
+    fn last_timestamp_falls_back_when_tail_window_misses() {
+        let huge_result = format!(
+            r#"{{"type":"user","timestamp":"2026-06-25T02:00:00.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"c1","content":"{}"}}]}}}}"#,
+            "x".repeat(200_000)
+        );
+        let path = tmp_jsonl("hugeline", &format!("{huge_result}\n"));
+
+        let small_cap = last_timestamp(&path, 1024);
+        assert_eq!(small_cap, None, "a small cap should miss inside the huge line");
+
+        let fallback = last_timestamp(&path, u64::MAX);
+        assert_eq!(fallback.as_deref(), Some("2026-06-25T02:00:00.000Z"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// read_head must scan past many meta-less lines (a resumed session's summaries)
+    /// within its byte budget rather than stopping at a fixed line count.
+    #[test]
+    fn read_head_scans_past_many_summary_lines_within_budget() {
+        let summary = r#"{"type":"summary","summary":"earlier work"}"#;
+        let mut content = String::new();
+        for _ in 0..80 {
+            content.push_str(summary);
+            content.push('\n');
+        }
+        content.push_str(r#"{"type":"user","timestamp":"2026-06-25T01:00:00.000Z","entrypoint":"cli","message":{"role":"user","content":"go"}}"#);
+        content.push('\n');
+        let path = tmp_jsonl("manysummaries", &content);
+
+        let head = read_head(&path, HEAD_BYTES);
+        assert!(
+            head.iter().any(|e| e.timestamp.is_some()),
+            "expected the timestamped entry beyond line 80 to be scanned"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

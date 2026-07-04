@@ -5,7 +5,7 @@ use crate::model::replay::{
 use chrono::DateTime;
 
 /// Maximum number of characters kept from a user prompt / spawn description.
-const EXCERPT_CHARS: usize = 200;
+pub(crate) const EXCERPT_CHARS: usize = 200;
 
 /// A subagent spawn recorded from the main file's Agent/Task tool_use,
 /// waiting to be linked to a sub JSONL file in assemble().
@@ -42,12 +42,9 @@ pub struct BuiltFile {
 /// activity rows via timeline::row_for / next_skill (same classify results as live).
 pub struct ReplayBuilder {
     agent_id: Option<String>,
-    is_sub: bool,
     /// The most recent tool name (for PostToolUse), same carryover as Session.current.tool_name.
     last_tool: Option<String>,
     active_skill: Option<String>,
-    /// Whether the currently stored first_prompt is markup (see is_markup_prompt).
-    first_prompt_is_markup: bool,
     out: BuiltFile,
 }
 
@@ -55,10 +52,8 @@ impl ReplayBuilder {
     pub fn new_main() -> Self {
         Self {
             agent_id: None,
-            is_sub: false,
             last_tool: None,
             active_skill: None,
-            first_prompt_is_markup: false,
             out: BuiltFile::default(),
         }
     }
@@ -66,10 +61,8 @@ impl ReplayBuilder {
     pub fn new_sub(agent_id: &str) -> Self {
         Self {
             agent_id: Some(agent_id.to_string()),
-            is_sub: true,
             last_tool: None,
             active_skill: None,
-            first_prompt_is_markup: false,
             out: BuiltFile::default(),
         }
     }
@@ -106,9 +99,13 @@ impl ReplayBuilder {
             self.last_tool = row.tool_name;
         }
 
-        if let Some(ev) =
-            super::session_tracker::reconstruct(e, "", self.agent_id.as_deref(), self.last_tool.clone(), self.is_sub)
-        {
+        if let Some(ev) = super::session_tracker::reconstruct(
+            e,
+            "",
+            self.agent_id.as_deref(),
+            self.last_tool.clone(),
+            self.agent_id.is_some(),
+        ) {
             let (kind, text) = match ev.event.as_str() {
                 "UserPromptSubmit" => (
                     ReplayEventKind::UserPrompt,
@@ -143,7 +140,7 @@ impl ReplayBuilder {
     }
 
     fn absorb_meta(&mut self, e: &RawEntry, at_ms: f64) {
-        if self.is_sub {
+        if self.agent_id.is_some() {
             // Record the model the assistant entry actually used, like apply_sub does
             // (set as soon as known, then keep updating with later values).
             if let Some(model) = e.model() {
@@ -165,12 +162,13 @@ impl ReplayBuilder {
             // commands and harness wrappers arrive as "<command-message>…" /
             // "<local-command-caveat>…" markup, which makes an ugly title. Keep
             // the first prompt as a fallback, replace it once a real one shows up.
-            if self.out.first_prompt.is_none() {
+            let stored_is_markup = self
+                .out
+                .first_prompt
+                .as_deref()
+                .is_some_and(is_markup_prompt);
+            if self.out.first_prompt.is_none() || (stored_is_markup && !is_markup_prompt(text)) {
                 self.out.first_prompt = Some(excerpt(text, EXCERPT_CHARS));
-                self.first_prompt_is_markup = is_markup_prompt(text);
-            } else if self.first_prompt_is_markup && !is_markup_prompt(text) {
-                self.out.first_prompt = Some(excerpt(text, EXCERPT_CHARS));
-                self.first_prompt_is_markup = false;
             }
         }
         // Agent/Task tool_use -> a subagent spawn (main session only).
@@ -210,9 +208,7 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)
     let started_at_ms = main.first_ts_ms?;
     let mut ended_at_ms = main.last_ts_ms.unwrap_or(started_at_ms);
 
-    let mut events: Vec<ReplayEvent> = Vec::with_capacity(
-        1 + main.events.len() + subs.iter().map(|(_, b)| b.events.len() + 1).sum::<usize>(),
-    );
+    let mut events: Vec<ReplayEvent> = Vec::with_capacity(1 + main.events.len());
     events.push(ReplayEvent {
         at_ms: started_at_ms,
         kind: ReplayEventKind::SessionStart,
@@ -316,15 +312,27 @@ pub fn epoch_ms(ts: &str) -> Option<f64> {
         .map(|dt| dt.timestamp_millis() as f64)
 }
 
+/// Known harness/slash-command wrapper tags (see is_markup_prompt).
+const MARKUP_PREFIXES: &[&str] = &[
+    "<command-message>",
+    "<command-name>",
+    "<command-args>",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+];
+
 /// Whether a prompt is harness/slash-command markup rather than human text
 /// ("<command-message>…", "<local-command-caveat>…"). Used to pick a nicer
-/// session title, never to drop the prompt from the event stream.
+/// session title, never to drop the prompt from the event stream. Only matches
+/// known wrapper tags, not any text that happens to start with '<' (e.g. a human
+/// prompt pasting HTML/XML).
 pub fn is_markup_prompt(text: &str) -> bool {
-    text.trim_start().starts_with('<')
+    let trimmed = text.trim_start();
+    MARKUP_PREFIXES.iter().any(|tag| trimmed.starts_with(tag))
 }
 
 /// Char-boundary-safe excerpt of the first `chars` characters.
-fn excerpt(s: &str, chars: usize) -> String {
+pub(crate) fn excerpt(s: &str, chars: usize) -> String {
     let trimmed = s.trim();
     if trimmed.chars().count() <= chars {
         trimmed.to_string()
@@ -428,6 +436,16 @@ mod tests {
             &format!(r#"{{"type":"user","timestamp":"{T1}","message":{{"role":"user","content":"review this branch please"}}}}"#),
         ]);
         assert_eq!(main.first_prompt.as_deref(), Some("review this branch please"));
+    }
+
+    /// Only known harness/slash-command wrapper tags count as markup: a human prompt
+    /// that happens to start with '<' (pasted HTML/XML) must not be treated as such.
+    #[test]
+    fn is_markup_prompt_matches_only_known_tags() {
+        assert!(is_markup_prompt("<command-message>review</command-message>"));
+        assert!(is_markup_prompt("<local-command-caveat>Caveat: ...</local-command-caveat>"));
+        assert!(!is_markup_prompt("<div>fix this html snippet</div>"));
+        assert!(!is_markup_prompt("<script>alert(1)</script> is XSS, please review"));
     }
 
     /// Entries without a parsable timestamp are skipped entirely.
