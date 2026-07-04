@@ -25,7 +25,7 @@ pub fn build_timeline(entries: &[RawEntry], limit: usize) -> Vec<TimelineEntry> 
 }
 
 /// One entry -> one row. Rows that do not change state (text responses, tool_result, TodoWrite) are None.
-fn row_for(e: &RawEntry) -> Option<TimelineEntry> {
+pub(crate) fn row_for(e: &RawEntry) -> Option<TimelineEntry> {
     if e.is_turn_end() {
         return Some(row(WorkKind::Idle, None, None, e));
     }
@@ -57,7 +57,7 @@ fn row(kind: WorkKind, tool_name: Option<String>, detail: Option<String>, e: &Ra
 }
 
 /// Same logic as next_active_skill (symmetric with session_tracker).
-fn next_skill(e: &RawEntry, prev: Option<String>) -> Option<String> {
+pub(crate) fn next_skill(e: &RawEntry, prev: Option<String>) -> Option<String> {
     if e.is_turn_end() || e.is_user_prompt() {
         return None;
     }

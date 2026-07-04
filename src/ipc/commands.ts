@@ -6,6 +6,8 @@ import type {
   FocusResult,
   HookEntry,
   InitialState,
+  ReplayData,
+  ReplaySessionMeta,
   ScopedHook,
   SkillDef,
   TimelineEntry,
@@ -67,6 +69,12 @@ export const api = {
   },
   getSessionTimeline(sessionId: string, agentId: string | null): Promise<TimelineEntry[]> {
     return invoke<TimelineEntry[]>("get_session_timeline", { sessionId, agentId });
+  },
+  listReplaySessions(): Promise<ReplaySessionMeta[]> {
+    return invoke<ReplaySessionMeta[]>("list_replay_sessions");
+  },
+  getReplayData(sessionId: string): Promise<ReplayData> {
+    return invoke<ReplayData>("get_replay_data", { sessionId });
   },
   focusTerminal(sessionId: string, project: string): Promise<FocusResult> {
     return invoke<FocusResult>("focus_terminal", { sessionId, project });

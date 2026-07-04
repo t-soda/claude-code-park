@@ -2,6 +2,7 @@ pub mod activity;
 pub mod agent;
 pub mod config;
 pub mod metrics;
+pub mod replay;
 pub mod session;
 pub mod terminal;
 pub mod timeline;

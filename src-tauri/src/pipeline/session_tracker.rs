@@ -120,7 +120,7 @@ pub fn apply_sub(
 /// The lifecycle event reconstructed from a single entry.
 /// For PostToolUse, the caller passes the most recent tool name as `post_tool`
 /// (handled the same for main/sub). If is_sub=true, turn_end becomes SubagentStop.
-fn reconstruct(
+pub(crate) fn reconstruct(
     e: &RawEntry,
     session_id: &str,
     agent_id: Option<&str>,
