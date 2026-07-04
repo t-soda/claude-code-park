@@ -46,6 +46,8 @@ pub struct ReplayBuilder {
     /// The most recent tool name (for PostToolUse), same carryover as Session.current.tool_name.
     last_tool: Option<String>,
     active_skill: Option<String>,
+    /// Whether the currently stored first_prompt is markup (see is_markup_prompt).
+    first_prompt_is_markup: bool,
     out: BuiltFile,
 }
 
@@ -56,6 +58,7 @@ impl ReplayBuilder {
             is_sub: false,
             last_tool: None,
             active_skill: None,
+            first_prompt_is_markup: false,
             out: BuiltFile::default(),
         }
     }
@@ -66,6 +69,7 @@ impl ReplayBuilder {
             is_sub: true,
             last_tool: None,
             active_skill: None,
+            first_prompt_is_markup: false,
             out: BuiltFile::default(),
         }
     }
@@ -156,9 +160,17 @@ impl ReplayBuilder {
         if e.slug.is_some() {
             self.out.slug = e.slug.clone();
         }
-        if self.out.first_prompt.is_none() {
-            if let Some(text) = e.user_prompt_text() {
+        if let Some(text) = e.user_prompt_text() {
+            // Prefer the first human-looking prompt as the session title: slash
+            // commands and harness wrappers arrive as "<command-message>…" /
+            // "<local-command-caveat>…" markup, which makes an ugly title. Keep
+            // the first prompt as a fallback, replace it once a real one shows up.
+            if self.out.first_prompt.is_none() {
                 self.out.first_prompt = Some(excerpt(text, EXCERPT_CHARS));
+                self.first_prompt_is_markup = is_markup_prompt(text);
+            } else if self.first_prompt_is_markup && !is_markup_prompt(text) {
+                self.out.first_prompt = Some(excerpt(text, EXCERPT_CHARS));
+                self.first_prompt_is_markup = false;
             }
         }
         // Agent/Task tool_use -> a subagent spawn (main session only).
@@ -304,6 +316,13 @@ pub fn epoch_ms(ts: &str) -> Option<f64> {
         .map(|dt| dt.timestamp_millis() as f64)
 }
 
+/// Whether a prompt is harness/slash-command markup rather than human text
+/// ("<command-message>…", "<local-command-caveat>…"). Used to pick a nicer
+/// session title, never to drop the prompt from the event stream.
+pub fn is_markup_prompt(text: &str) -> bool {
+    text.trim_start().starts_with('<')
+}
+
 /// Char-boundary-safe excerpt of the first `chars` characters.
 fn excerpt(s: &str, chars: usize) -> String {
     let trimmed = s.trim();
@@ -399,6 +418,16 @@ mod tests {
             .find(|ev| ev.tool_name.as_deref() == Some("Edit") && ev.kind == ReplayEventKind::Activity)
             .expect("edit activity");
         assert_eq!(edit.active_skill.as_deref(), Some("brainstorming"));
+    }
+
+    /// The builder's first_prompt also prefers human text over command markup.
+    #[test]
+    fn builder_prefers_human_first_prompt() {
+        let main = build_main(&[
+            &format!(r#"{{"type":"user","timestamp":"{T0}","message":{{"role":"user","content":"<command-message>review</command-message>"}}}}"#),
+            &format!(r#"{{"type":"user","timestamp":"{T1}","message":{{"role":"user","content":"review this branch please"}}}}"#),
+        ]);
+        assert_eq!(main.first_prompt.as_deref(), Some("review this branch please"));
     }
 
     /// Entries without a parsable timestamp are skipped entirely.

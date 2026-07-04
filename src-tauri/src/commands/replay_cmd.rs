@@ -3,7 +3,7 @@ use crate::jsonl::entry::RawEntry;
 use crate::jsonl::{for_each_entry, TailReader};
 use crate::model::replay::{ReplayData, ReplaySessionMeta};
 use crate::model::session::SessionStatus;
-use crate::pipeline::replay::{assemble, epoch_ms, ReplayBuilder};
+use crate::pipeline::replay::{assemble, epoch_ms, is_markup_prompt, ReplayBuilder};
 use crate::pipeline::session_tracker::status_from_last;
 use crate::pipeline::{route_path, Target};
 use crate::state::AppState;
@@ -150,9 +150,12 @@ fn meta_from_scan(
             .unwrap_or_default(),
         slug: head.iter().find_map(|e| e.slug.clone()),
         git_branch: head.iter().find_map(|e| e.git_branch.clone()),
+        // Prefer a human-looking prompt over slash-command/harness markup for the title.
         first_prompt: head
             .iter()
-            .find_map(|e| e.user_prompt_text())
+            .filter_map(|e| e.user_prompt_text())
+            .find(|s| !is_markup_prompt(s))
+            .or_else(|| head.iter().find_map(|e| e.user_prompt_text()))
             .map(|s| s.chars().take(200).collect()),
         started_at_ms,
         ended_at_ms,
@@ -204,6 +207,29 @@ mod tests {
         ];
         let now = Utc.with_ymd_and_hms(2026, 6, 25, 1, 5, 0).unwrap();
         assert!(meta_from_scan("SID", &head, Some("2026-06-25T01:00:00.000Z"), now).is_none());
+    }
+
+    /// Slash-command/caveat markup is skipped for the title when a human prompt follows.
+    #[test]
+    fn prefers_human_prompt_over_markup() {
+        let head = vec![
+            e(r#"{"type":"user","timestamp":"2026-06-25T01:00:00.000Z","message":{"role":"user","content":"<local-command-caveat>Caveat: ...</local-command-caveat>"}}"#),
+            e(r#"{"type":"user","timestamp":"2026-06-25T01:00:01.000Z","message":{"role":"user","content":"fix the login bug"}}"#),
+        ];
+        let meta = meta_from_scan("SID", &head, Some("2026-06-25T02:00:00.000Z"), long_after())
+            .expect("listed");
+        assert_eq!(meta.first_prompt.as_deref(), Some("fix the login bug"));
+    }
+
+    /// All-markup sessions still get a title (fallback to the first prompt).
+    #[test]
+    fn falls_back_to_markup_when_nothing_else() {
+        let head = vec![
+            e(r#"{"type":"user","timestamp":"2026-06-25T01:00:00.000Z","message":{"role":"user","content":"<command-message>review</command-message>"}}"#),
+        ];
+        let meta = meta_from_scan("SID", &head, Some("2026-06-25T02:00:00.000Z"), long_after())
+            .expect("listed");
+        assert_eq!(meta.first_prompt.as_deref(), Some("<command-message>review</command-message>"));
     }
 
     /// No parsable start timestamp -> not listed.
