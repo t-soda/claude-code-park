@@ -258,6 +258,22 @@ describe("logRows / activeRowIndex", () => {
     expect(rows.map((r) => r.kind)).toEqual(["TurnEnd", "SubagentStop"]);
   });
 
+  it("keeps a second turn boundary after a Stop-hook continuation (no prompt between)", () => {
+    // A Stop hook blocking the stop makes the orchestrator resume work and end the
+    // turn again later without any UserPrompt in between; the second boundary is a
+    // real event and must survive the pair-collapsing.
+    const rows = logRows(
+      data([
+        ev(1000, "TurnEnd"), // turn_duration
+        ev(1001, "TurnEnd"), // stop_hook_summary (hook blocked the stop)
+        ev(2000, "Activity", { work: "Editing", tool_name: "Edit" }),
+        ev(3000, "TurnEnd"), // the real, second turn end
+        ev(3001, "TurnEnd"),
+      ])
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["TurnEnd", "Activity", "TurnEnd"]);
+  });
+
   it("finds the last row at or before the playhead by binary search", () => {
     const rows = logRows(basicData());
     expect(activeRowIndex(rows, -1)).toBe(-1);

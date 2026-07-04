@@ -207,11 +207,12 @@ export function flashesFor(
  * A turn boundary writes two TurnEnd entries close together in time (turn_duration
  * and stop_hook_summary), which would otherwise show as duplicated "Turn end" lines;
  * only the first is kept, tracked by "has a TurnEnd already been kept for the current
- * turn" (reset on the next UserPrompt, the only event that starts a new turn) rather
- * than by adjacency in `rows` — an unrelated subagent's same-instant SubagentStop can
- * otherwise sort between the pair and defeat a simple "previous row" check. TurnEnd is
- * only ever emitted for the orchestrator (agent_id null); subagents never re-open a
- * turn without an intervening UserPrompt, so resetting on UserPrompt alone is safe.
+ * turn" rather than by adjacency in `rows` — an unrelated subagent's same-instant
+ * SubagentStop can otherwise sort between the pair and defeat a simple "previous row"
+ * check. The flag resets on the next UserPrompt (a new turn) and on any kept Activity
+ * row (work resumed without a prompt — a Stop hook blocking the stop makes the
+ * orchestrator continue and end the turn again later; that second boundary is real
+ * and must not be swallowed).
  */
 export function logRows(data: ReplayData): ReplayEvent[] {
   const rows: ReplayEvent[] = [];
@@ -231,6 +232,7 @@ export function logRows(data: ReplayData): ReplayEvent[] {
         break;
       case "Activity":
         if (ev.tool_name === null) continue;
+        turnEndKept = false;
         break;
       default:
         continue;
