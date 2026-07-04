@@ -96,6 +96,7 @@ export function AgentEditor({
           <label>{t("agentEditor.modelLabel")}</label>
           <select value={model} onChange={(e) => setModel(e.target.value)}>
             <option value="">inherit</option>
+            <option value="fable">fable</option>
             <option value="opus">opus</option>
             <option value="sonnet">sonnet</option>
             <option value="haiku">haiku</option>

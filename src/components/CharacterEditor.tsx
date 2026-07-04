@@ -18,7 +18,7 @@ const TOOL_KEY: Record<Tool, MessageKey> = {
 };
 
 // Employee variants (employees with no model specified fall back to variantCommon; others use the model name as-is).
-const VARIANTS: EmployeeVariant[] = ["employee", "haiku", "sonnet", "opus"];
+const VARIANTS: EmployeeVariant[] = ["employee", "haiku", "sonnet", "opus", "fable"];
 
 function hex(n: number): string {
   return `#${n.toString(16).padStart(6, "0")}`;
