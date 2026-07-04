@@ -22,6 +22,7 @@ function data(events: ReplayEvent[], subagents: ReplayData["subagents"] = []): R
       first_prompt: "fix the bug",
       started_at_ms: 1_000_000,
       ended_at_ms: 1_000_000 + Math.max(last, subEnd),
+      status: "Ended",
     },
     subagents,
     events,

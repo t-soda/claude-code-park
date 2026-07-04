@@ -25,6 +25,7 @@ function fixture(): ReplayData {
       first_prompt: "go",
       started_at_ms: 1_000_000,
       ended_at_ms: 1_010_000,
+      status: "Ended",
     },
     subagents: [],
     events: [
@@ -192,6 +193,7 @@ describe("replayStore.play", () => {
         first_prompt: "go",
         started_at_ms: 1_000_000,
         ended_at_ms: 1_000_000,
+        status: "Ended",
       },
       subagents: [],
       events: [ev(0, "SessionStart")],
