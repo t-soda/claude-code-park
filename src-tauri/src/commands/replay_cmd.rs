@@ -17,6 +17,11 @@ use tauri::State;
 const HEAD_BYTES: u64 = 256 * 1024;
 /// Tail window read per file to find the last event timestamp.
 const TAIL_BYTES: u64 = 64 * 1024;
+/// Fallback tail window when TAIL_BYTES lands entirely inside one oversized last
+/// line (a huge final tool_result). Bounded on purpose: an uncapped read would pull
+/// a whole multi-hundred-MB transcript into memory during listing. A session whose
+/// last line exceeds even this is dropped from the list rather than paid for.
+const TAIL_FALLBACK_BYTES: u64 = 8 * 1024 * 1024;
 /// Only sessions modified within this window are listed (bounds the scan cost;
 /// same policy as the metrics scan).
 const MAX_AGE_SECS: u64 = 31 * 24 * 3600;
@@ -48,9 +53,10 @@ pub async fn list_replay_sessions(state: State<'_, AppState>) -> AppResult<Vec<R
             }
             let head = read_head(&path, HEAD_BYTES);
             // If the tail window lands entirely inside one oversized last line (a huge
-            // final tool_result), the capped read yields nothing; fall back to an
-            // uncapped read for that rare case rather than dropping the session.
-            let last_ts = last_timestamp(&path, TAIL_BYTES).or_else(|| last_timestamp(&path, u64::MAX));
+            // final tool_result), the capped read yields nothing; retry with a larger
+            // but still bounded window rather than dropping the session.
+            let last_ts = last_timestamp(&path, TAIL_BYTES)
+                .or_else(|| last_timestamp(&path, TAIL_FALLBACK_BYTES));
             if let Some(meta) = meta_from_scan(&session_id, &head, last_ts.as_deref(), now) {
                 out.push(meta);
             }
@@ -210,7 +216,8 @@ mod tests {
     }
 
     /// When the tail window (TAIL_BYTES cap) lands entirely inside one oversized last
-    /// line, the capped read finds no timestamp; the uncapped fallback must still find it.
+    /// line, the capped read finds no timestamp; the larger — but still bounded —
+    /// fallback window must find it without reading the whole file.
     #[test]
     fn last_timestamp_falls_back_when_tail_window_misses() {
         let huge_result = format!(
@@ -222,7 +229,7 @@ mod tests {
         let small_cap = last_timestamp(&path, 1024);
         assert_eq!(small_cap, None, "a small cap should miss inside the huge line");
 
-        let fallback = last_timestamp(&path, u64::MAX);
+        let fallback = last_timestamp(&path, TAIL_FALLBACK_BYTES);
         assert_eq!(fallback.as_deref(), Some("2026-06-25T02:00:00.000Z"));
 
         let _ = std::fs::remove_file(&path);
