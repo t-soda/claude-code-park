@@ -4,7 +4,7 @@ export type Cell = 0 | 1 | 2; // 0=empty, 1=body, 2=eye
 export type Target = "orchestrator" | "employee";
 
 /** An employee's model. Used to draw distinct pixel-art sprites per model. */
-export type ModelKind = "haiku" | "sonnet" | "opus";
+export type ModelKind = "haiku" | "sonnet" | "opus" | "fable";
 
 /** Employee edit variants (shared default plus per-model). */
 export type EmployeeVariant = "employee" | ModelKind;
@@ -28,6 +28,7 @@ export const EDIT_KEYS: EditKey[] = [
   "haiku",
   "sonnet",
   "opus",
+  "fable",
 ];
 
 // Stamps a string template into the center of a 16x16 grid.
@@ -72,7 +73,7 @@ const EMPLOYEE_ROWS = [
   ".#.#.#.",
 ];
 
-// Per-model employee sprites. Body size encodes rank (haiku=small < sonnet=standard < opus=large).
+// Per-model employee sprites. Body size encodes rank (haiku=small < sonnet=standard < opus=large < fable=largest).
 // sonnet keeps the standard build of the original employee default (EMPLOYEE_ROWS).
 const HAIKU_ROWS = [
   ".###.",
@@ -98,12 +99,28 @@ const OPUS_ROWS = [
   ".#.....#.",
 ];
 
+// fable sits above opus: the widest build, topped with a three-point crown.
+const FABLE_ROWS = [
+  "..#..#..#..",
+  ".#########.",
+  "###########",
+  "##o#####o##",
+  "###########",
+  "###########",
+  "###########",
+  "###########",
+  "###########",
+  ".###.#.###.",
+  ".##.....##.",
+];
+
 const ROWS_FOR: Record<EditKey, string[]> = {
   orchestrator: ORCHESTRATOR_ROWS,
   employee: EMPLOYEE_ROWS,
   haiku: HAIKU_ROWS,
   sonnet: SONNET_ROWS,
   opus: OPUS_ROWS,
+  fable: FABLE_ROWS,
 };
 
 type Templates = Record<EditKey, CharTemplate>;
@@ -129,6 +146,7 @@ export function defaults(): Templates {
 export function classifyModel(model: string | null | undefined): ModelKind | null {
   if (!model) return null;
   const m = model.toLowerCase();
+  if (m.includes("fable")) return "fable";
   if (m.includes("haiku")) return "haiku";
   if (m.includes("opus")) return "opus";
   if (m.includes("sonnet")) return "sonnet";
