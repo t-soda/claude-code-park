@@ -17,3 +17,4 @@ src-tauri/target
 # Claude Code (local, not published)
 CLAUDE.md
 CLAUDE.local.md
+.claude/
