@@ -219,6 +219,33 @@ export const ko: Messages = {
       "터미널에서 Claude Code를 실행하면 여기에 Orchestrator가 나타나 일을 시작합니다.",
   },
 
+  replay: {
+    title: "리플레이",
+    subtitle: "세션을 타운에서 재생합니다. 실행 중인 세션은 지금까지의 동작을, 종료된 세션은 전체 과정을 천천히 되짚어 볼 수 있습니다.",
+    browser: {
+      empty: "재생할 수 있는 세션이 없습니다(최근 31일 표시).",
+      fetchError: "세션 목록을 가져오지 못했습니다: {error}",
+      statusActive: "실행 중",
+      statusIdle: "대기 중",
+    },
+    player: {
+      back: "목록으로",
+      play: "재생",
+      pause: "일시정지",
+      follow: "▼ 따라가기",
+      railsNote: "hook 레일은 현재 설정을 표시합니다(세션 당시의 기록이 아닙니다)",
+      loadError: "리플레이를 불러오지 못했습니다: {error}",
+    },
+    log: {
+      title: "이벤트 로그",
+      sessionStart: "🏢 세션 시작",
+      userPrompt: "🧑‍💻 프롬프트",
+      turnEnd: "🏁 턴 종료",
+      subagentSpawn: "📣 서브에이전트 시작",
+      subagentStop: "👋 서브에이전트 종료",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ 메뉴",
   },

@@ -223,6 +223,36 @@ export const ja = {
       "ターミナルで Claude Code を動かすと、ここに Orchestrator が現れて働き始めます。",
   },
 
+  replay: {
+    title: "リプレイ",
+    subtitle:
+      "セッションをタウンで再生します。実行中のセッションはここまでの動きを、終了したセッションは全体を、後からゆっくり追えます。",
+    browser: {
+      empty: "再生できるセッションがありません(直近31日分を表示します)。",
+      // {error} は失敗理由。
+      fetchError: "セッション一覧の取得に失敗しました: {error}",
+      statusActive: "実行中",
+      statusIdle: "アイドル",
+    },
+    player: {
+      back: "一覧へ",
+      play: "再生",
+      pause: "一時停止",
+      follow: "▼ 追従",
+      railsNote: "hook レールは現在の設定です(セッション当時の記録ではありません)",
+      // {error} は失敗理由。
+      loadError: "リプレイの読み込みに失敗しました: {error}",
+    },
+    log: {
+      title: "イベントログ",
+      sessionStart: "🏢 セッション開始",
+      userPrompt: "🧑‍💻 プロンプト",
+      turnEnd: "🏁 ターン終了",
+      subagentSpawn: "📣 サブエージェント起動",
+      subagentStop: "👋 サブエージェント終了",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ メニュー",
   },

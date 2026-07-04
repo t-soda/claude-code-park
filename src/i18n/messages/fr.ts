@@ -223,6 +223,34 @@ export const fr: Messages = {
       "Lancez Claude Code dans votre terminal et l'Orchestrator apparaîtra ici pour se mettre au travail.",
   },
 
+  replay: {
+    title: "Relecture",
+    subtitle:
+      "Rejouez des sessions dans la ville. Pour une session en cours, voyez ce qu'elle a fait jusqu'ici ; pour une session terminée, l'histoire complète — à votre rythme.",
+    browser: {
+      empty: "Aucune session à rejouer (affichage des 31 derniers jours).",
+      fetchError: "Échec de la récupération de la liste des sessions : {error}",
+      statusActive: "En cours",
+      statusIdle: "Inactive",
+    },
+    player: {
+      back: "Retour à la liste",
+      play: "Lecture",
+      pause: "Pause",
+      follow: "▼ Suivre",
+      railsNote: "Les rails de hooks affichent la configuration actuelle (pas un enregistrement de la session)",
+      loadError: "Échec du chargement de la relecture : {error}",
+    },
+    log: {
+      title: "Journal des événements",
+      sessionStart: "🏢 Début de session",
+      userPrompt: "🧑‍💻 Prompt",
+      turnEnd: "🏁 Fin du tour",
+      subagentSpawn: "📣 Sous-agent lancé",
+      subagentStop: "👋 Sous-agent terminé",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ Menu",
   },

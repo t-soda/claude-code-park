@@ -219,6 +219,33 @@ export const zh: Messages = {
       "在终端运行 Claude Code，这里就会出现 Orchestrator 开始工作。",
   },
 
+  replay: {
+    title: "回放",
+    subtitle: "在小镇中回放会话。正在运行的会话可以看到目前为止的动作,已结束的会话可以看到完整过程,慢慢回顾何时执行了什么。",
+    browser: {
+      empty: "没有可回放的会话(显示最近 31 天)。",
+      fetchError: "获取会话列表失败:{error}",
+      statusActive: "运行中",
+      statusIdle: "空闲",
+    },
+    player: {
+      back: "返回列表",
+      play: "播放",
+      pause: "暂停",
+      follow: "▼ 跟随",
+      railsNote: "hook 导轨显示的是当前配置(并非会话当时的记录)",
+      loadError: "回放加载失败:{error}",
+    },
+    log: {
+      title: "事件日志",
+      sessionStart: "🏢 会话开始",
+      userPrompt: "🧑‍💻 提示词",
+      turnEnd: "🏁 回合结束",
+      subagentSpawn: "📣 子代理启动",
+      subagentStop: "👋 子代理结束",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ 菜单",
   },

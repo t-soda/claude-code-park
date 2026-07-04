@@ -219,6 +219,34 @@ export const en: Messages = {
       "Run Claude Code in your terminal and the Orchestrator will appear here and start working.",
   },
 
+  replay: {
+    title: "Replay",
+    subtitle:
+      "Play back sessions in the Town. For a running session, see what it's done so far; for a finished one, the whole story — at your own pace.",
+    browser: {
+      empty: "No sessions to replay (showing the last 31 days).",
+      fetchError: "Failed to fetch the session list: {error}",
+      statusActive: "Active",
+      statusIdle: "Idle",
+    },
+    player: {
+      back: "Back to list",
+      play: "Play",
+      pause: "Pause",
+      follow: "▼ Follow",
+      railsNote: "Hook rails show the current config (not a recording from the session)",
+      loadError: "Failed to load the replay: {error}",
+    },
+    log: {
+      title: "Event log",
+      sessionStart: "🏢 Session start",
+      userPrompt: "🧑‍💻 Prompt",
+      turnEnd: "🏁 Turn end",
+      subagentSpawn: "📣 Subagent spawned",
+      subagentStop: "👋 Subagent finished",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ Menu",
   },

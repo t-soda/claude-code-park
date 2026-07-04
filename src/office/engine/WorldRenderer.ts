@@ -133,11 +133,17 @@ export class WorldRenderer {
   private lastPlaced: PlacedRoom[] = [];
   private townSig = "";
 
+  /** Whether the sign-side icons (menu / terminal) are shown. The replay stage hides
+   *  them: a replayed session has no terminal to focus and no room menu wired up. */
+  private showSignIcons: boolean;
+
   constructor(
     layer: Container,
     private floor: IsoFloor,
-    private onContentSize?: (w: number, h: number) => void
+    private onContentSize?: (w: number, h: number) => void,
+    opts?: { showSignIcons?: boolean }
   ) {
+    this.showSignIcons = opts?.showSignIcons ?? true;
     this.contentLayer.sortableChildren = true;
     this.calloutLayer.addChild(this.tetherG);
     this.calloutLayer.addChild(this.beam);
@@ -198,7 +204,9 @@ export class WorldRenderer {
     pick: (st: RoomView) => Container
   ): { id: string; st: RoomView } | null {
     for (const [id, st] of this.views) {
-      const b = pick(st).getBounds(); // AABB in global space
+      const icon = pick(st);
+      if (!icon.visible) continue; // hidden icons (replay stage) are not clickable
+      const b = icon.getBounds(); // AABB in global space
       if (hitIcon(cx, cy, { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY })) {
         return { id, st };
       }
@@ -310,12 +318,14 @@ export class WorldRenderer {
             g.rect(7, 8 + i * 6, ICON.size - 14, 2).fill(0xf6ecc9);
           }
         });
+        menuIcon.visible = this.showSignIcons;
         this.signLayer.addChild(menuIcon);
         // Terminal icon styled like ">_".
         const terminalIcon = makeSignIcon((g) => {
           g.moveTo(8, 9).lineTo(13, 14).lineTo(8, 19).stroke({ width: 2, color: 0xf6ecc9 });
           g.rect(14, 18, 7, 2).fill(0xf6ecc9);
         });
+        terminalIcon.visible = this.showSignIcons;
         this.signLayer.addChild(terminalIcon);
         st = {
           orch,

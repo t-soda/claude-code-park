@@ -226,6 +226,34 @@ export const es: Messages = {
       "Ejecuta Claude Code en tu terminal y aquí aparecerá el Orchestrator que empezará a trabajar.",
   },
 
+  replay: {
+    title: "Repetición",
+    subtitle:
+      "Reproduce sesiones en el pueblo. De una en curso, ve lo que ha hecho hasta ahora; de una terminada, la historia completa, a tu ritmo.",
+    browser: {
+      empty: "No hay sesiones para reproducir (se muestran los últimos 31 días).",
+      fetchError: "No se pudo obtener la lista de sesiones: {error}",
+      statusActive: "En curso",
+      statusIdle: "Inactiva",
+    },
+    player: {
+      back: "Volver a la lista",
+      play: "Reproducir",
+      pause: "Pausa",
+      follow: "▼ Seguir",
+      railsNote: "Los raíles de hooks muestran la configuración actual (no una grabación de la sesión)",
+      loadError: "No se pudo cargar la repetición: {error}",
+    },
+    log: {
+      title: "Registro de eventos",
+      sessionStart: "🏢 Inicio de sesión",
+      userPrompt: "🧑‍💻 Prompt",
+      turnEnd: "🏁 Fin del turno",
+      subagentSpawn: "📣 Subagente iniciado",
+      subagentStop: "👋 Subagente terminado",
+    },
+  },
+
   roomMenu: {
     backToMenu: "‹ Menú",
   },
