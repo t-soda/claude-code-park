@@ -32,7 +32,7 @@ pub struct RawMessage {
 #[serde(untagged)]
 pub enum ContentField {
     /// A catch-all to absorb string content (user prompts, etc.) without dropping it.
-    Text(#[allow(dead_code)] String),
+    Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
@@ -40,6 +40,8 @@ pub enum ContentField {
 pub struct ContentBlock {
     #[serde(rename = "type")]
     pub block_type: Option<String>,
+    // text
+    pub text: Option<String>,
     // tool_use
     pub name: Option<String>,
     pub input: Option<serde_json::Value>,
@@ -102,6 +104,21 @@ impl RawEntry {
                 .blocks()
                 .iter()
                 .any(|b| b.block_type.as_deref() == Some("tool_result"))
+    }
+
+    /// The human prompt text: the string content, or the first text block for array
+    /// content. None for non-prompt entries (tool_results, assistant entries, ...).
+    pub fn user_prompt_text(&self) -> Option<&str> {
+        if !self.is_user_prompt() {
+            return None;
+        }
+        match self.message.as_ref()?.content.as_ref()? {
+            ContentField::Text(s) => Some(s),
+            ContentField::Blocks(blocks) => blocks
+                .iter()
+                .find(|b| b.block_type.as_deref() == Some("text"))
+                .and_then(|b| b.text.as_deref()),
+        }
     }
 
     /// Whether it is a turn-end marker (system/turn_duration, etc. = transition to waiting for user input).

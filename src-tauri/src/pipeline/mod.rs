@@ -1,4 +1,5 @@
 pub mod classify;
+pub mod replay;
 pub mod session_tracker;
 pub mod timeline;
 

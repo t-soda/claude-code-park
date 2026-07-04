@@ -35,7 +35,7 @@ pub async fn get_session_timeline(
 
 /// Resolves the actual JSONL path from session_id (+ agent_id) via glob.
 /// Validates it against the expected path (Main / Sub) with route_path before returning.
-fn resolve_path(projects_dir: &std::path::Path, session_id: &str, agent_id: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn resolve_path(projects_dir: &std::path::Path, session_id: &str, agent_id: Option<&str>) -> Option<PathBuf> {
     let pattern = match agent_id {
         Some(aid) => format!(
             "{}/*/{}/subagents/agent-{}.jsonl",
@@ -47,8 +47,12 @@ fn resolve_path(projects_dir: &std::path::Path, session_id: &str, agent_id: Opti
     };
     for path in glob::glob(&pattern).into_iter().flatten().flatten() {
         match (agent_id, route_path(projects_dir, &path)) {
-            (None, Some(Target::Main { .. })) => return Some(path),
-            (Some(_), Some(Target::Sub { .. })) => return Some(path),
+            (None, Some(Target::Main { session_id: sid })) if sid == session_id => return Some(path),
+            (Some(aid), Some(Target::Sub { parent_id, agent_id: routed_aid }))
+                if parent_id == session_id && routed_aid == aid =>
+            {
+                return Some(path);
+            }
             _ => continue,
         }
     }

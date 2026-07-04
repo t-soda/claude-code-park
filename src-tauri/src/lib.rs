@@ -63,6 +63,8 @@ pub fn run() {
             commands::commands_cmd::list_commands,
             commands::metrics_cmd::get_metrics,
             commands::session_cmd::get_session_timeline,
+            commands::replay_cmd::list_replay_sessions,
+            commands::replay_cmd::get_replay_data,
             commands::terminal_cmd::focus_terminal
         ])
         .run(tauri::generate_context!())
