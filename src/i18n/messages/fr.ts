@@ -67,6 +67,7 @@ export const fr: Messages = {
     displaySection: "Affichage",
     showHookViz: "Afficher la visualisation des hooks (rails, faisceaux) dans la Ville",
     showToolNames: "Afficher le nom des outils dans le journal",
+    showTrayIcon: "Afficher l'icône dans la barre de menus",
     characterEditor: "Éditeur de personnage",
     languageSection: "Langue",
     languageLabel: "Langue d'affichage",

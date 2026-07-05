@@ -66,6 +66,7 @@ export const ko: Messages = {
     displaySection: "표시 설정",
     showHookViz: "hook 시각화(레일・발화 빔)를 타운에 표시",
     showToolNames: "로그에 도구 이름 표시",
+    showTrayIcon: "메뉴 막대에 아이콘 표시",
     characterEditor: "캐릭터 에디터",
     languageSection: "언어",
     languageLabel: "표시 언어",

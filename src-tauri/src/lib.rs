@@ -38,8 +38,10 @@ pub fn run() {
                     state.world.lock().unwrap().agents = agents;
                 }
             }
-            // Menu-bar icon that animates while a session waits for a user reply.
-            // Set up before the watcher so the first emit_sessions already reaches it.
+            // Starts the menu-bar icon's animation machinery (but not the icon itself —
+            // the frontend enables/disables it via set_tray_enabled, based on the
+            // persisted Settings preference). Set up before the watcher so the first
+            // emit_sessions already reaches it.
             tray::setup(app.handle())?;
             // Channel carrying the set of active project working dirs from the session
             // watcher to the config watcher (so it can live-watch each <project>/.claude).
@@ -69,7 +71,8 @@ pub fn run() {
             commands::session_cmd::get_session_timeline,
             commands::replay_cmd::list_replay_sessions,
             commands::replay_cmd::get_replay_data,
-            commands::terminal_cmd::focus_terminal
+            commands::terminal_cmd::focus_terminal,
+            commands::tray_cmd::set_tray_enabled
         ])
         .run(tauri::generate_context!())
         .expect("failed to launch Claude Code Park");

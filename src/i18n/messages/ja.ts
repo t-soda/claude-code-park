@@ -70,6 +70,7 @@ export const ja = {
     displaySection: "表示設定",
     showHookViz: "hook 可視化（レール・発火ビーム）をタウンに表示する",
     showToolNames: "ログにツール名を表示する",
+    showTrayIcon: "メニューバーにアイコンを表示する",
     characterEditor: "キャラクターエディタ",
     languageSection: "言語",
     languageLabel: "表示言語",

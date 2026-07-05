@@ -5,6 +5,7 @@ import { useWorldStore } from "./stores/worldStore";
 import { useConfigStore } from "./stores/configStore";
 import { useScopedConfigStore } from "./stores/scopedConfigStore";
 import { useEffectiveHooksStore } from "./stores/effectiveHooksStore";
+import { useUiPrefsStore } from "./stores/uiPrefsStore";
 import { AgentsManager } from "./components/AgentsManager";
 import { HooksManager } from "./components/HooksManager";
 import { SkillsManager } from "./components/SkillsManager";
@@ -49,6 +50,12 @@ export function App() {
     watchEffective();
     // Silently check GitHub Releases for a newer version (shows a banner only if one exists).
     useUpdateStore.getState().checkForUpdate({ silent: true });
+    // The tray icon itself lives in Rust and starts out hidden; sync it to the
+    // persisted Settings preference (default: shown). Routed through the store's
+    // own setter (rather than calling the IPC command directly) so there's exactly
+    // one place that applies this preference to the real tray icon.
+    const prefs = useUiPrefsStore.getState();
+    prefs.setTrayEnabled(prefs.trayEnabled);
   }, [start, loadConfig, watchConfig, watchScoped, watchEffective]);
 
   return (

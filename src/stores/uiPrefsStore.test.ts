@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLifecyclePref, parseHookViewPref } from "./uiPrefsStore";
+import { parseLifecyclePref, parseHookViewPref, parseTrayEnabledPref } from "./uiPrefsStore";
 
 describe("parseLifecyclePref", () => {
   it("defaults to true when raw is missing", () => {
@@ -40,5 +40,24 @@ describe("parseHookViewPref", () => {
   });
   it("hookView null (non-boolean) defaults to true", () => {
     expect(parseHookViewPref(JSON.stringify({ hookView: null }))).toBe(true);
+  });
+});
+
+describe("parseTrayEnabledPref", () => {
+  it("unset (no key) defaults to true", () => {
+    expect(parseTrayEnabledPref(JSON.stringify({ lifecycleView: true }))).toBe(true);
+    expect(parseTrayEnabledPref(null)).toBe(true);
+  });
+  it("explicit false is false", () => {
+    expect(parseTrayEnabledPref(JSON.stringify({ trayEnabled: false }))).toBe(false);
+  });
+  it("explicit true is true", () => {
+    expect(parseTrayEnabledPref(JSON.stringify({ trayEnabled: true }))).toBe(true);
+  });
+  it("invalid JSON defaults to true", () => {
+    expect(parseTrayEnabledPref("{not json")).toBe(true);
+  });
+  it("trayEnabled null (non-boolean) defaults to true", () => {
+    expect(parseTrayEnabledPref(JSON.stringify({ trayEnabled: null }))).toBe(true);
   });
 });

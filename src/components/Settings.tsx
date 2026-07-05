@@ -14,6 +14,8 @@ export function Settings() {
   const setLifecycleView = useUiPrefsStore((s) => s.setLifecycleView);
   const hookView = useUiPrefsStore((s) => s.hookView);
   const setHookView = useUiPrefsStore((s) => s.setHookView);
+  const trayEnabled = useUiPrefsStore((s) => s.trayEnabled);
+  const setTrayEnabled = useUiPrefsStore((s) => s.setTrayEnabled);
   const locale = useI18nStore((s) => s.locale);
   const setLocale = useI18nStore((s) => s.setLocale);
 
@@ -58,6 +60,14 @@ export function Settings() {
             onChange={(e) => setLifecycleView(e.target.checked)}
           />{" "}
           {t("settings.showToolNames")}
+        </label>
+        <label style={{ display: "block", marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={trayEnabled}
+            onChange={(e) => setTrayEnabled(e.target.checked)}
+          />{" "}
+          {t("settings.showTrayIcon")}
         </label>
       </div>
 

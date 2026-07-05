@@ -68,6 +68,7 @@ export const es: Messages = {
     showHookViz:
       "Mostrar la visualización de hooks (raíles y haces de disparo) en el Pueblo",
     showToolNames: "Mostrar el nombre de las herramientas en el registro",
+    showTrayIcon: "Mostrar el icono en la barra de menús",
     characterEditor: "Editor de personajes",
     languageSection: "Idioma",
     languageLabel: "Idioma de visualización",
