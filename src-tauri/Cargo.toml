@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-park"
-version = "0.4.0"
+version = "0.5.0"
 description = "Claude Code Park — a desktop app to manage and improve Claude Code in a game-like way"
 edition = "2021"
 rust-version = "1.77"
