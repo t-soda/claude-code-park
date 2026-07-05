@@ -1,4 +1,4 @@
-use super::classify::{classify_tool, skill_name};
+use super::classify::{basename, classify_tool, skill_name};
 use crate::jsonl::entry::RawEntry;
 use crate::model::activity::{ActivityState, WorkKind};
 use crate::model::session::{Session, SessionStatus, SubAgentRun};
@@ -356,22 +356,75 @@ fn status_from_age_secs(age: i64) -> SessionStatus {
 }
 
 /// Recomputes the status of all sessions/subagents in the World relative to the current time.
-/// Once no longer Active, resets the work kind to Idle (💤 waiting) (prevents the last tool from lingering).
+/// Once no longer Active, resets the work kind to Idle (💤 waiting) (prevents the last tool from lingering) —
+/// unless it's genuinely still waiting on the user (see `keeps_awaiting_state`).
 pub fn recompute_statuses(world: &mut World, now: DateTime<Utc>) {
     for s in world.sessions.values_mut() {
         s.status = status_from_last(s.last_event_at.as_deref(), now);
-        if s.status != SessionStatus::Active {
+        if s.status != SessionStatus::Active && !keeps_awaiting_state(s.status, s.current.kind) {
             mark_idle(&mut s.current);
         }
         for r in &mut s.subagents {
             // Subagents use their own current.since as an approximation of the last event time.
             let last = r.current.since.as_deref().or(r.started_at.as_deref());
             r.status = status_from_last(last, now);
-            if r.status != SessionStatus::Active {
+            if r.status != SessionStatus::Active && !keeps_awaiting_state(r.status, r.current.kind) {
                 mark_idle(&mut r.current);
             }
         }
     }
+}
+
+/// Whether recompute_statuses should leave `current` alone despite the
+/// session/subagent going inactive.
+///
+/// A session blocked on an explicit question or plan approval (AwaitingUser)
+/// is expected to sit without new JSONL events for as long as the user takes
+/// to decide — that's the entire point of the tray's "waiting for your
+/// reply" indicator. Without this exemption, `mark_idle` would silently
+/// clear it after the same 5-minute inactivity window used for every other
+/// work kind, so stepping away for a coffee would make the icon (and its
+/// menu entry) disappear while the question is still genuinely unanswered.
+/// Once status reaches Ended (the existing "session probably abandoned"
+/// threshold), treat it like any other stale state instead of waiting forever.
+fn keeps_awaiting_state(status: SessionStatus, kind: WorkKind) -> bool {
+    status != SessionStatus::Ended && kind == WorkKind::AwaitingUser
+}
+
+/// A session currently blocked on an explicit question or plan approval,
+/// with the bits the tray menu needs to display it and jump to its terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaitingSession {
+    pub session_id: String,
+    pub project: String,
+    /// Display label: the slug if the session has one, else the project's
+    /// basename (mirrors the frontend's `slug ?? project.split('/').pop()`
+    /// convention used for the office/replay session labels).
+    pub label: String,
+}
+
+/// Sessions blocked on an explicit question or plan approval (AwaitingUser).
+/// Drives the menu-bar attention animation and its "jump to this session"
+/// menu.
+///
+/// Deliberately excludes plain Idle (turn ended normally): that is the
+/// resting state after every single turn, including the session driving
+/// the very conversation the user is having right now, so treating it as
+/// "waiting for a reply" made the icon animate constantly regardless of
+/// whether anything actually needed attention.
+pub fn sessions_awaiting_reply(sessions: &[Session]) -> Vec<AwaitingSession> {
+    sessions
+        .iter()
+        .filter(|s| s.current.kind == WorkKind::AwaitingUser)
+        .map(|s| AwaitingSession {
+            session_id: s.session_id.clone(),
+            project: s.project.clone(),
+            label: s
+                .slug
+                .clone()
+                .unwrap_or_else(|| basename(&s.project).to_string()),
+        })
+        .collect()
 }
 
 /// Resets the work state to idle (Idle).
@@ -528,6 +581,79 @@ mod tests {
             WorkKind::Editing,
             "a few minutes without writes must not drop an active work kind to waiting"
         );
+    }
+
+    /// An AwaitingUser session is expected to sit without new events for as
+    /// long as the user takes to answer — that's the whole point of the
+    /// tray's "waiting for your reply" indicator. It must survive past the
+    /// ordinary 5-minute inactivity window (which would otherwise clobber it
+    /// back to Idle via mark_idle, making the icon/menu vanish while the
+    /// question is still genuinely unanswered), but should still give up
+    /// once the session reaches Ended (here, 20 minutes: past IDLE_SECS).
+    #[test]
+    fn awaiting_user_survives_five_minutes_but_not_ended() {
+        let mut w = World::default();
+        let question = e(r#"{"type":"assistant","timestamp":"2026-06-22T01:00:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{}}]}}"#);
+        apply_main(&mut w, "S", &[question], &mut Vec::new());
+        assert_eq!(w.sessions.get("S").unwrap().current.kind, WorkKind::AwaitingUser);
+
+        // 10 minutes later: status has decayed to Idle, but the question is still unanswered.
+        let ten_min_later = DateTime::parse_from_rfc3339("2026-06-22T01:10:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        recompute_statuses(&mut w, ten_min_later);
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.status, SessionStatus::Idle);
+        assert_eq!(
+            s.current.kind,
+            WorkKind::AwaitingUser,
+            "an unanswered question must not be cleared just because the user hasn't replied yet"
+        );
+
+        // 20 minutes later: now Ended, so it's treated as abandoned like anything else.
+        let twenty_min_later = DateTime::parse_from_rfc3339("2026-06-22T01:20:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        recompute_statuses(&mut w, twenty_min_later);
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.status, SessionStatus::Ended);
+        assert_eq!(s.current.kind, WorkKind::Idle);
+    }
+
+    /// sessions_awaiting_reply: only an explicit AwaitingUser (question /
+    /// plan approval) session appears, labeled by its slug (falling back to
+    /// the project's basename). A plain turn-ended Idle session doesn't
+    /// appear, since that is the normal resting state after every turn
+    /// (including the session driving the current conversation) and must
+    /// not itself trigger the "needs attention" animation/menu. A
+    /// still-working session doesn't appear either.
+    #[test]
+    fn sessions_awaiting_reply_only_includes_explicit_awaiting_user() {
+        fn session(session_id: &str, project: &str, slug: Option<&str>, kind: WorkKind) -> Session {
+            Session {
+                session_id: session_id.to_string(),
+                project: project.to_string(),
+                slug: slug.map(str::to_string),
+                current: ActivityState {
+                    kind,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }
+        let sessions = vec![
+            session("s1", "/proj", None, WorkKind::Idle), // turn just ended -> not included
+            session("s2", "/Users/x/my-project", None, WorkKind::AwaitingUser), // no slug -> basename
+            session("s3", "/proj", Some("custom-slug"), WorkKind::AwaitingUser), // slug wins
+            session("s4", "/proj", None, WorkKind::Editing), // still working -> not included
+        ];
+        let awaiting = sessions_awaiting_reply(&sessions);
+        assert_eq!(awaiting.len(), 2);
+        assert_eq!(awaiting[0].session_id, "s2");
+        assert_eq!(awaiting[0].label, "my-project");
+        assert_eq!(awaiting[1].session_id, "s3");
+        assert_eq!(awaiting[1].label, "custom-slug");
+        assert!(sessions_awaiting_reply(&[]).is_empty());
     }
 
     /// The Skill tool sets active_skill, which carries over through a subsequent Edit.

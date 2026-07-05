@@ -199,6 +199,8 @@ fn emit_sessions(app: &AppHandle) {
         });
         v
     };
+    // Feed the menu-bar attention indicator and its "jump to this session" menu.
+    crate::tray::update_awaiting(app, session_tracker::sessions_awaiting_reply(&sessions));
     let _ = app.emit(EV_SESSIONS, sessions);
 }
 
