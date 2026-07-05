@@ -4,6 +4,7 @@ use crate::state::AppState;
 use crate::terminal::{
     find_host_terminal, parse_ps_rows, parse_session_entry, TerminalKind,
 };
+use std::path::PathBuf;
 use std::process::Command;
 use tauri::State;
 
@@ -134,7 +135,17 @@ pub async fn focus_terminal(
     session_id: String,
     project: String,
 ) -> AppResult<FocusResult> {
-    let sessions_dir = state.paths.sessions_dir();
+    focus_terminal_core(state.paths.sessions_dir(), session_id, project).await
+}
+
+/// Core logic behind the `focus_terminal` command, factored out so callers
+/// outside the IPC layer (the tray menu's "jump to this session" click) can
+/// invoke it directly without a Tauri `State` extractor.
+pub async fn focus_terminal_core(
+    sessions_dir: PathBuf,
+    session_id: String,
+    project: String,
+) -> AppResult<FocusResult> {
     tauri::async_runtime::spawn_blocking(move || {
         // 1. session_id -> running claude PID, via the session file Claude Code writes.
         let claude_pid = resolve_claude_pid(&sessions_dir, &session_id).ok_or_else(|| {
@@ -187,7 +198,7 @@ pub async fn focus_terminal(
         }
 
         // 2. Window identification (best-effort). Ignore failures like missing permission (activate done = success).
-        let needle = project.rsplit('/').find(|s| !s.is_empty()).unwrap_or(&project);
+        let needle = crate::pipeline::classify::basename(&project);
         let focus_script = build_window_focus_script(&host.kind, tty, needle);
         let window_focused = if focus_script.is_empty() {
             false

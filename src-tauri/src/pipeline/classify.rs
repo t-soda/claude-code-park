@@ -34,7 +34,7 @@ fn extract_detail(name: &str, input: Option<&Value>) -> Option<String> {
 
     match name {
         "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookRead" | "NotebookEdit" => {
-            pick("file_path").map(|p| basename(&p))
+            pick("file_path").map(|p| basename(&p).to_string())
         }
         "Bash" | "BashOutput" => pick("description").or_else(|| pick("command").map(|c| truncate(&c, 48))),
         "Grep" => pick("pattern").map(|p| truncate(&p, 40)),
@@ -55,8 +55,12 @@ fn extract_detail(name: &str, input: Option<&Value>) -> Option<String> {
     }
 }
 
-fn basename(path: &str) -> String {
-    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
+/// Basename of a `/`-or-`\`-separated path, skipping empty segments (so a
+/// trailing separator doesn't yield an empty result). Shared by tool-input
+/// detail extraction, the tray menu's session labels, and terminal-focus
+/// window matching.
+pub fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).find(|s| !s.is_empty()).unwrap_or(path)
 }
 
 /// Extracts the display skill name from a Skill tool's input.
@@ -100,6 +104,13 @@ mod tests {
     use super::*;
     use crate::model::activity::WorkKind;
     use serde_json::json;
+
+    #[test]
+    fn basename_skips_trailing_separator() {
+        assert_eq!(basename("/a/b/c.ts"), "c.ts");
+        assert_eq!(basename("/a/b/my-project/"), "my-project");
+        assert_eq!(basename("just-a-name"), "just-a-name");
+    }
 
     #[test]
     fn skill_strips_plugin_namespace() {

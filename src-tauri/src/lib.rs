@@ -9,6 +9,7 @@ mod paths;
 mod pipeline;
 mod state;
 mod terminal;
+mod tray;
 mod watcher;
 
 use paths::ClaudePaths;
@@ -37,6 +38,9 @@ pub fn run() {
                     state.world.lock().unwrap().agents = agents;
                 }
             }
+            // Menu-bar icon that animates while a session waits for a user reply.
+            // Set up before the watcher so the first emit_sessions already reaches it.
+            tray::setup(app.handle())?;
             // Channel carrying the set of active project working dirs from the session
             // watcher to the config watcher (so it can live-watch each <project>/.claude).
             let (proj_tx, proj_rx) =
