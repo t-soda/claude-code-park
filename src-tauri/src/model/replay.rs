@@ -42,6 +42,11 @@ pub struct ReplaySubagent {
     pub model: Option<String>,
     pub spawn_ms: f64,
     pub stop_ms: f64,
+    /// agent_id of the subagent that spawned this run. None = spawned by the
+    /// main session (orchestrator).
+    pub parent_agent_id: Option<String>,
+    /// Spawn depth from the sidecar meta (1 = spawned by the main session).
+    pub spawn_depth: Option<u32>,
 }
 
 /// The kind of a single replay event. A tool call intentionally yields two events at

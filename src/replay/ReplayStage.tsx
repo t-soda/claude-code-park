@@ -8,7 +8,8 @@ import { useOpenLogStore } from "../stores/openLogStore";
 import { useHookDetailStore } from "../stores/hookDetailStore";
 import { CharacterLogDialog } from "../components/CharacterLogDialog";
 import { HookDetailDialog } from "../components/HookDetailDialog";
-import { useI18nStore, t as tr } from "../i18n";
+import { useI18nStore } from "../i18n";
+import { handleHoverTip } from "../office/hoverTip";
 import { api, type EffectiveHooks } from "../ipc/commands";
 import type { ReplayFrame } from "./replayEngine";
 import type { HookFlash } from "../stores/hookStore";
@@ -60,9 +61,11 @@ export function ReplayStage() {
       };
       syncFrame();
       renderer.setHookView(useUiPrefsStore.getState().hookView);
+      renderer.setDelegationView(useUiPrefsStore.getState().delegationView);
       unsubs.push(
         useUiPrefsStore.subscribe((s) => {
           renderer?.setHookView(s.hookView);
+          renderer?.setDelegationView(s.delegationView);
           // applyEffectiveHooks no-ops while hookView is off, so flipping it on
           // mid-session must re-apply the already-fetched rails, not just toggle
           // visibility of whatever was (or wasn't) set at fetch time.
@@ -135,21 +138,7 @@ export function ReplayStage() {
         !!(renderer?.hitTestRail(cx, cy) || renderer?.hitTest(cx, cy));
       stage.onHover = (cx, cy) => {
         const tip = tipRef.current;
-        if (!tip) return;
-        const rail = renderer?.hitTestRail(cx, cy) ?? null;
-        if (!rail) {
-          tip.style.display = "none";
-          return;
-        }
-        const g = rail.group;
-        const summary =
-          g.hooks.length === 0
-            ? tr("office.unregistered")
-            : g.hooks.map((h) => h.command).join(" / ");
-        tip.textContent = `${g.event} #${g.index + 1} — ${summary}`;
-        tip.style.left = `${cx + 12}px`;
-        tip.style.top = `${cy + 12}px`;
-        tip.style.display = "block";
+        if (tip && renderer) handleHoverTip(renderer, cx, cy, tip);
       };
 
       stage.app.ticker.add(() => {

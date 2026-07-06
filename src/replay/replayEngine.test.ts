@@ -70,6 +70,8 @@ describe("createReplayCursor", () => {
       model: null,
       spawn_ms: 2000,
       stop_ms: 6000,
+      parent_agent_id: null,
+      spawn_depth: null,
     };
     const cursor = createReplayCursor(
       data(
@@ -99,9 +101,43 @@ describe("createReplayCursor", () => {
       model: null,
       spawn_ms: 0,
       stop_ms: 0,
+      parent_agent_id: null,
+      spawn_depth: null,
     };
     const cursor = createReplayCursor(data([ev(1000, "TurnEnd")], [sub]));
     expect(cursor.seek(500).sessions[0].subagents).toHaveLength(0);
+  });
+
+  it("carries the delegation linkage into the frame's runs", () => {
+    const lead = {
+      agent_id: "A",
+      subagent_type: "lead",
+      description: null,
+      model: null,
+      spawn_ms: 0,
+      stop_ms: 10000,
+      parent_agent_id: null,
+      spawn_depth: 1,
+    };
+    const child = {
+      agent_id: "B",
+      subagent_type: "explore",
+      description: null,
+      model: null,
+      spawn_ms: 1000,
+      stop_ms: 10000,
+      parent_agent_id: "A",
+      spawn_depth: 2,
+    };
+    const cursor = createReplayCursor(
+      data([ev(0, "SubagentSpawn"), ev(20000, "TurnEnd")], [lead, child])
+    );
+    const runs = cursor.seek(2000).sessions[0].subagents;
+    const a = runs.find((r) => r.agent_id === "A")!;
+    const b = runs.find((r) => r.agent_id === "B")!;
+    expect(a.parent_agent_id).toBeNull();
+    expect(b.parent_agent_id).toBe("A");
+    expect(b.spawn_depth).toBe(2);
   });
 
   it("seek(T) equals many small advances to T (determinism)", () => {
@@ -144,6 +180,8 @@ describe("createReplayCursor", () => {
       model: null,
       spawn_ms: 0,
       stop_ms: 3000,
+      parent_agent_id: null,
+      spawn_depth: null,
     };
     const cursor = createReplayCursor(
       data(
@@ -168,6 +206,8 @@ describe("createReplayCursor", () => {
       model: null,
       spawn_ms: 0,
       stop_ms: 1000,
+      parent_agent_id: null,
+      spawn_depth: null,
     };
     const cursor = createReplayCursor(
       data([ev(0, "SessionStart"), ev(20000, "TurnEnd")], [sub])

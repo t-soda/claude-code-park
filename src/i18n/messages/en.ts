@@ -65,6 +65,7 @@ export const en: Messages = {
     subtitle: "Configure how the Town screen looks and how characters appear.",
     displaySection: "Display settings",
     showHookViz: "Show hook visualization (rails, firing beams) in the Town",
+    showDelegationLines: "Show subagent delegation lines in the Town",
     showToolNames: "Show tool names in the log",
     characterEditor: "Character editor",
     languageSection: "Language",
@@ -214,6 +215,9 @@ export const en: Messages = {
 
   office: {
     unregistered: "None registered",
+    orchestrator: "Orchestrator",
+    delegatedBy: "Called by: {name}",
+    delegatesTo: "Calls: {name}",
     quietTitle: "The Town is quiet right now 🌙",
     quietBody:
       "Run Claude Code in your terminal and the Orchestrator will appear here and start working.",

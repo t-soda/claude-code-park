@@ -154,7 +154,19 @@ fn process_path(
             Target::Sub {
                 parent_id,
                 agent_id,
-            } => session_tracker::apply_sub(&mut world, parent_id, agent_id, &entries, &mut events),
+            } => {
+                // The sidecar meta (agent-{id}.meta.json) links the transcript to the
+                // exact Agent tool_use that spawned it, and carries the spawn depth.
+                let meta = crate::jsonl::meta::read_sidecar_meta(path);
+                session_tracker::apply_sub(
+                    &mut world,
+                    parent_id,
+                    agent_id,
+                    meta.as_ref(),
+                    &entries,
+                    &mut events,
+                )
+            }
         }
     };
     if emit_lifecycle {

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseLifecyclePref, parseHookViewPref } from "./uiPrefsStore";
+import {
+  parseLifecyclePref,
+  parseHookViewPref,
+  parseDelegationViewPref,
+} from "./uiPrefsStore";
 
 describe("parseLifecyclePref", () => {
   it("defaults to true when raw is missing", () => {
@@ -40,5 +44,21 @@ describe("parseHookViewPref", () => {
   });
   it("hookView null (non-boolean) defaults to true", () => {
     expect(parseHookViewPref(JSON.stringify({ hookView: null }))).toBe(true);
+  });
+});
+
+describe("parseDelegationViewPref", () => {
+  it("unset (no key) defaults to true", () => {
+    expect(parseDelegationViewPref(JSON.stringify({ hookView: true }))).toBe(true);
+    expect(parseDelegationViewPref(null)).toBe(true);
+  });
+  it("explicit false is false", () => {
+    expect(parseDelegationViewPref(JSON.stringify({ delegationView: false }))).toBe(false);
+  });
+  it("explicit true is true", () => {
+    expect(parseDelegationViewPref(JSON.stringify({ delegationView: true }))).toBe(true);
+  });
+  it("invalid JSON defaults to true", () => {
+    expect(parseDelegationViewPref("{not json")).toBe(true);
   });
 });

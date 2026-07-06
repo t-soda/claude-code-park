@@ -5,6 +5,7 @@ import { useEffectiveHooksStore, uniqueProjects } from "../stores/effectiveHooks
 import { useConfigStore } from "../stores/configStore";
 import { Stage } from "./engine/Stage";
 import { WorldRenderer } from "./engine/WorldRenderer";
+import { handleHoverTip } from "./hoverTip";
 import { useCharacterStore } from "../stores/characterStore";
 import { useOpenLogStore } from "../stores/openLogStore";
 import { CharacterLogDialog } from "../components/CharacterLogDialog";
@@ -67,7 +68,11 @@ export function OfficeView() {
       stage.onThemeChange = () => renderer?.refreshFloor();
       renderer.sync(useWorldStore.getState().sessions);
       renderer.setHookView(useUiPrefsStore.getState().hookView);
-      unsubHookView = useUiPrefsStore.subscribe((s) => renderer?.setHookView(s.hookView));
+      renderer.setDelegationView(useUiPrefsStore.getState().delegationView);
+      unsubHookView = useUiPrefsStore.subscribe((s) => {
+        renderer?.setHookView(s.hookView);
+        renderer?.setDelegationView(s.delegationView);
+      });
       // On language change, re-project the town labels (status bubbles, name tags, TODOs, etc.) to reflect it.
       unsubLocale = useI18nStore.subscribe(() => {
         renderer?.sync(useWorldStore.getState().sessions);
@@ -146,21 +151,7 @@ export function OfficeView() {
         );
       stage.onHover = (cx, cy) => {
         const tip = tipRef.current;
-        if (!tip) return;
-        const rail = renderer?.hitTestRail(cx, cy) ?? null;
-        if (!rail) {
-          tip.style.display = "none";
-          return;
-        }
-        const g = rail.group;
-        const summary =
-          g.hooks.length === 0
-            ? tr("office.unregistered")
-            : g.hooks.map((h) => h.command).join(" / ");
-        tip.textContent = `${g.event} #${g.index + 1} — ${summary}`;
-        tip.style.left = `${cx + 12}px`;
-        tip.style.top = `${cy + 12}px`;
-        tip.style.display = "block";
+        if (tip && renderer) handleHoverTip(renderer, cx, cy, tip);
       };
       stage.app.ticker.add(() => renderer?.update(performance.now() / 1000));
     });

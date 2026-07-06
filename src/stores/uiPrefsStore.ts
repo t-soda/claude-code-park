@@ -28,20 +28,45 @@ export function parseHookViewPref(raw: string | null): boolean {
   }
 }
 
-function load(): { lifecycleView: boolean; hookView: boolean } {
+/** Pure function reading delegationView from the persisted JSON (missing key defaults to true; only an explicit false is false). */
+export function parseDelegationViewPref(raw: string | null): boolean {
+  if (!raw) return true;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return { lifecycleView: parseLifecyclePref(raw), hookView: parseHookViewPref(raw) };
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    return obj?.delegationView !== false;
   } catch {
-    return { lifecycleView: true, hookView: true };
+    return true;
   }
 }
 
-function persist(state: { lifecycleView: boolean; hookView: boolean }): void {
+interface PersistedPrefs {
+  lifecycleView: boolean;
+  hookView: boolean;
+  delegationView: boolean;
+}
+
+function load(): PersistedPrefs {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return {
+      lifecycleView: parseLifecyclePref(raw),
+      hookView: parseHookViewPref(raw),
+      delegationView: parseDelegationViewPref(raw),
+    };
+  } catch {
+    return { lifecycleView: true, hookView: true, delegationView: true };
+  }
+}
+
+function persist(state: PersistedPrefs): void {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ lifecycleView: state.lifecycleView, hookView: state.hookView })
+      JSON.stringify({
+        lifecycleView: state.lifecycleView,
+        hookView: state.hookView,
+        delegationView: state.delegationView,
+      })
     );
   } catch {
     // Silently ignore when storage is unavailable (a cosmetic preference, not fatal).
@@ -55,6 +80,9 @@ interface UiPrefsState {
   /** Whether to show the entire hook visualization (rail + firing badges + round-trip beams). */
   hookView: boolean;
   setHookView: (on: boolean) => void;
+  /** Whether the subagent delegation arcs are always shown in the town (hover still reveals them when off). */
+  delegationView: boolean;
+  setDelegationView: (on: boolean) => void;
 }
 
 export const useUiPrefsStore = create<UiPrefsState>((set, get) => ({
@@ -65,6 +93,10 @@ export const useUiPrefsStore = create<UiPrefsState>((set, get) => ({
   },
   setHookView(on) {
     set({ hookView: on });
+    persist(get());
+  },
+  setDelegationView(on) {
+    set({ delegationView: on });
     persist(get());
   },
 }));
