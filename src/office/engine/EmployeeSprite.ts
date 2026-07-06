@@ -12,14 +12,31 @@ import { t } from "../../i18n";
  */
 const FACING_SKEW = Math.atan(0.5);
 
-/** Derive a stable color from the subagent_type name (same role yields the same color). */
-function colorFor(key: string): number {
+/**
+ * Hashes a string to a 32-bit int with an avalanche finalizer, so keys that share a long
+ * common prefix and differ only in a trailing character or two (e.g. sequential agent ids)
+ * still land on well-spread-out values instead of a cluster (a plain polynomial rolling hash
+ * would otherwise carry that small difference straight through to the output).
+ */
+function hashStr(key: string): number {
   let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
-  // HSL->RGB (fixed saturation and lightness)
-  const s = 0.55;
-  const l = 0.6;
+  for (let i = 0; i < key.length; i++) h = (Math.imul(h, 31) + key.charCodeAt(i)) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * Derive a stable color from a key (same key yields the same color). Hue, saturation, and
+ * lightness are all hashed independently (each from a differently-suffixed copy of the key)
+ * so the result spans a genuine 3D color space instead of a single ring of hues at fixed
+ * saturation/lightness, where neighboring hues tend to look too similar to tell apart.
+ */
+function colorFor(key: string): number {
+  const hue = hashStr(key) % 360;
+  const s = 0.5 + ((hashStr(`${key}#s`) % 100) / 100) * 0.35; // 0.50 - 0.85
+  const l = 0.45 + ((hashStr(`${key}#l`) % 100) / 100) * 0.3; // 0.45 - 0.75
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
   const m = l - c / 2;
@@ -68,7 +85,11 @@ export class EmployeeSprite extends Container {
     this.phase = phase;
     this.agentId = run.agent_id;
     this.label = run.subagent_type ?? t("sprite.dispatchFallback");
-    this.color = colorFor(run.subagent_type ?? run.agent_id);
+    // Keyed by agent_id (unique per spawn) rather than subagent_type, so repeatedly-dispatched
+    // roles (e.g. many "general-purpose" or same-model calls) still come out visually varied
+    // instead of clustering on one hue. Falls back to subagent_type only in the brief window
+    // before the JSONL sidecar identifies the agent_id (still "" at that point).
+    this.color = colorFor(run.agent_id || run.subagent_type || "unknown");
     this.nameLabel = new Text({
       text: "",
       style: {
