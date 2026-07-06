@@ -82,7 +82,7 @@ pub async fn get_replay_data(state: State<'_, AppState>, session_id: String) -> 
         let mut main = ReplayBuilder::new_main();
         for_each_entry(&path, |e| main.push(e));
 
-        let mut subs: Vec<(String, crate::pipeline::replay::BuiltFile)> = Vec::new();
+        let mut subs: Vec<crate::pipeline::replay::SubFile> = Vec::new();
         let sub_pattern = format!(
             "{}/*/{}/subagents/agent-*.jsonl",
             projects_dir.display(),
@@ -99,7 +99,13 @@ pub async fn get_replay_data(state: State<'_, AppState>, session_id: String) -> 
             }
             let mut builder = ReplayBuilder::new_sub(&agent_id);
             for_each_entry(&sub_path, |e| builder.push(e));
-            subs.push((agent_id, builder.finish()));
+            subs.push(crate::pipeline::replay::SubFile {
+                agent_id,
+                // Links the transcript to the exact spawning Agent tool_use (and
+                // carries the spawn depth) for the delegation arcs.
+                meta: crate::jsonl::meta::read_sidecar_meta(&sub_path),
+                built: builder.finish(),
+            });
         }
 
         assemble(&session_id, main.finish(), subs)

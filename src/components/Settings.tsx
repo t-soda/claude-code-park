@@ -16,6 +16,8 @@ export function Settings() {
   const setHookView = useUiPrefsStore((s) => s.setHookView);
   const trayEnabled = useUiPrefsStore((s) => s.trayEnabled);
   const setTrayEnabled = useUiPrefsStore((s) => s.setTrayEnabled);
+  const delegationView = useUiPrefsStore((s) => s.delegationView);
+  const setDelegationView = useUiPrefsStore((s) => s.setDelegationView);
   const locale = useI18nStore((s) => s.locale);
   const setLocale = useI18nStore((s) => s.setLocale);
 
@@ -52,6 +54,14 @@ export function Settings() {
             onChange={(e) => setHookView(e.target.checked)}
           />{" "}
           {t("settings.showHookViz")}
+        </label>
+        <label style={{ display: "block", marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={delegationView}
+            onChange={(e) => setDelegationView(e.target.checked)}
+          />{" "}
+          {t("settings.showDelegationLines")}
         </label>
         <label style={{ display: "block", marginTop: 8 }}>
           <input

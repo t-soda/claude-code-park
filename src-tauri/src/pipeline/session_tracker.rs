@@ -1,5 +1,6 @@
 use super::classify::{basename, classify_tool, skill_name};
 use crate::jsonl::entry::RawEntry;
+use crate::jsonl::meta::SubAgentMeta;
 use crate::model::activity::{ActivityState, WorkKind};
 use crate::model::session::{Session, SessionStatus, SubAgentRun};
 use crate::state::World;
@@ -43,13 +44,9 @@ pub fn apply_main(
 
     for e in entries {
         absorb_meta(session, e);
-        // Agent tool_use -> record the sub agent clocking in (main session only).
-        if let Some(tb) = e.last_tool_use() {
-            let name = tb.name.as_deref().unwrap_or("");
-            if name == "Agent" || name == "Task" {
-                register_subagent(session, tb, e.timestamp.as_deref());
-            }
-        }
+        // Agent tool_use -> record each spawned sub agent clocking in. One assistant
+        // entry may spawn several agents in parallel, so scan every block.
+        register_agent_calls(session, e, None);
         let last_tool = session.current.tool_name.clone();
         let skill = next_active_skill(e, session.current.active_skill.clone());
         let todos = next_todos(e, session.current.todos.clone());
@@ -74,6 +71,7 @@ pub fn apply_sub(
     world: &mut World,
     parent_id: &str,
     agent_id: &str,
+    meta: Option<&SubAgentMeta>,
     entries: &[RawEntry],
     out: &mut Vec<crate::hook_events::HookEvent>,
 ) -> bool {
@@ -85,14 +83,19 @@ pub fn apply_sub(
         .entry(parent_id.to_string())
         .or_insert_with(|| new_session(parent_id));
 
-    // Find an existing run: match by agent_id -> else the latest run with no agent_id assigned -> else create new.
-    let idx = find_or_create_run(session, agent_id);
+    // Find an existing run: match by agent_id -> else by the sidecar meta's spawning
+    // tool_use id -> else the latest run with no agent_id assigned -> else create new.
+    let idx = find_or_create_run(session, agent_id, meta);
+    absorb_run_meta(&mut session.subagents[idx], meta);
 
     for e in entries {
         if let Some(ts) = e.timestamp.clone() {
             session.subagents[idx].started_at.get_or_insert(ts.clone());
             session.last_event_at = Some(ts);
         }
+        // A subagent can itself spawn agents (nested delegation); record those
+        // calls with this agent as the parent.
+        register_agent_calls(session, e, Some(agent_id));
         // Record the model the assistant entry actually used (to pick the sprite by the
         // runtime model rather than the static model in the definition). Set it as soon as it is known, then update with later values.
         if let Some(model) = e.model() {
@@ -270,7 +273,25 @@ fn absorb_meta(session: &mut Session, e: &RawEntry) {
     }
 }
 
-fn register_subagent(session: &mut Session, tb: &crate::jsonl::entry::ContentBlock, ts: Option<&str>) {
+/// Registers a SubAgentRun for every Agent tool_use in the entry.
+/// `caller` is the spawning subagent's id (None when the main session spawns).
+fn register_agent_calls(session: &mut Session, e: &RawEntry, caller: Option<&str>) {
+    for tb in e.blocks() {
+        if tb.block_type.as_deref() != Some("tool_use") {
+            continue;
+        }
+        if matches!(tb.name.as_deref(), Some("Agent") | Some("Task")) {
+            register_subagent(session, tb, e.timestamp.as_deref(), caller);
+        }
+    }
+}
+
+fn register_subagent(
+    session: &mut Session,
+    tb: &crate::jsonl::entry::ContentBlock,
+    ts: Option<&str>,
+    caller: Option<&str>,
+) {
     let subagent_type = tb
         .input
         .as_ref()
@@ -283,6 +304,31 @@ fn register_subagent(session: &mut Session, tb: &crate::jsonl::entry::ContentBlo
         .and_then(|v| v.get("description"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // The spawned transcript may have been read before this call (startup scans and
+    // live tails don't order caller vs callee). Its sidecar meta already recorded
+    // this tool_use id, so enrich that run instead of duplicating it.
+    if let Some(tid) = tb.id.as_deref() {
+        if let Some(i) = session
+            .subagents
+            .iter()
+            .position(|r| r.tool_use_id.as_deref() == Some(tid))
+        {
+            let run = &mut session.subagents[i];
+            if run.parent_agent_id.is_none() {
+                run.parent_agent_id = caller.map(str::to_string);
+            }
+            if run.subagent_type.is_none() {
+                run.subagent_type = subagent_type;
+            }
+            if run.description.is_none() {
+                run.description = description;
+            }
+            if run.started_at.is_none() {
+                run.started_at = ts.map(str::to_string);
+            }
+            return;
+        }
+    }
     session.subagents.push(SubAgentRun {
         agent_id: String::new(),
         subagent_type,
@@ -291,10 +337,32 @@ fn register_subagent(session: &mut Session, tb: &crate::jsonl::entry::ContentBlo
         started_at: ts.map(str::to_string),
         status: SessionStatus::Active,
         current: ActivityState::default(),
+        tool_use_id: tb.id.clone(),
+        parent_agent_id: caller.map(str::to_string),
+        spawn_depth: None,
     });
 }
 
-fn find_or_create_run(session: &mut Session, agent_id: &str) -> usize {
+/// Merges sidecar meta into the run. Fields already learned from the caller's
+/// Agent tool_use win; the sidecar fills whatever registration could not know
+/// (spawn_depth always, everything else when the caller's transcript was never read).
+fn absorb_run_meta(run: &mut SubAgentRun, meta: Option<&SubAgentMeta>) {
+    let Some(m) = meta else { return };
+    if run.spawn_depth.is_none() {
+        run.spawn_depth = m.spawn_depth;
+    }
+    if run.tool_use_id.is_none() {
+        run.tool_use_id = m.tool_use_id.clone();
+    }
+    if run.subagent_type.is_none() {
+        run.subagent_type = m.agent_type.clone();
+    }
+    if run.description.is_none() {
+        run.description = m.description.clone();
+    }
+}
+
+fn find_or_create_run(session: &mut Session, agent_id: &str, meta: Option<&SubAgentMeta>) -> usize {
     if let Some(i) = session
         .subagents
         .iter()
@@ -302,12 +370,26 @@ fn find_or_create_run(session: &mut Session, agent_id: &str) -> usize {
     {
         return i;
     }
-    // Link to an unassigned run registered earlier by the parent's Agent tool_use.
-    if let Some(i) = session
+    // Exact link: the sidecar meta names the spawning tool_use, so claim the pending
+    // run registered from that call (robust when several spawns are in flight).
+    if let Some(tid) = meta.and_then(|m| m.tool_use_id.as_deref()) {
+        if let Some(i) = session
+            .subagents
+            .iter()
+            .position(|r| r.agent_id.is_empty() && r.tool_use_id.as_deref() == Some(tid))
+        {
+            session.subagents[i].agent_id = agent_id.to_string();
+            return i;
+        }
+        // The named call was never seen (caller's transcript outside the restore
+        // window). Don't steal another spawn's pending run; start a fresh one.
+    } else if let Some(i) = session
         .subagents
         .iter()
         .rposition(|r| r.agent_id.is_empty())
     {
+        // No sidecar: fall back to the latest run with no agent_id assigned
+        // (arrival-order heuristic, as before sidecar metas existed).
         session.subagents[i].agent_id = agent_id.to_string();
         return i;
     }
@@ -476,13 +558,146 @@ mod tests {
         }
 
         let sub_work = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-21T16:20:30.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"Bash","input":{"command":"npm test","description":"run tests"}}]}}"#);
-        apply_sub(&mut w, "S", "aid1", &[sub_work], &mut Vec::new());
+        apply_sub(&mut w, "S", "aid1", None, &[sub_work], &mut Vec::new());
 
         let s = w.sessions.get("S").unwrap();
         assert_eq!(s.subagents.len(), 1, "attaches to the unassigned run, so it does not increase");
         assert_eq!(s.subagents[0].agent_id, "aid1");
         assert_eq!(s.subagents[0].current.kind, WorkKind::Running);
         assert_eq!(s.subagents[0].current.detail.as_deref(), Some("run tests"));
+    }
+
+    fn meta(tool_use_id: &str, depth: u32) -> SubAgentMeta {
+        SubAgentMeta {
+            agent_type: Some("general-purpose".into()),
+            description: None,
+            tool_use_id: Some(tool_use_id.into()),
+            spawn_depth: Some(depth),
+        }
+    }
+
+    /// One assistant entry can spawn several agents in parallel; every Agent
+    /// tool_use registers a run (not just the last block).
+    #[test]
+    fn parallel_agent_calls_register_every_run() {
+        let mut w = World::default();
+        let delegate = e(
+            r#"{"type":"assistant","timestamp":"2026-06-21T16:20:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"a"}},{"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"Plan","description":"b"}}]}}"#,
+        );
+        apply_main(&mut w, "S", &[delegate], &mut Vec::new());
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.subagents.len(), 2);
+        assert_eq!(s.subagents[0].tool_use_id.as_deref(), Some("t1"));
+        assert_eq!(s.subagents[1].tool_use_id.as_deref(), Some("t2"));
+        assert!(s.subagents.iter().all(|r| r.parent_agent_id.is_none()));
+    }
+
+    /// A subagent spawning another agent records itself as the caller, and the
+    /// child's sidecar meta links the transcript to that exact call.
+    #[test]
+    fn nested_agent_call_links_child_to_caller() {
+        let mut w = World::default();
+        let root = e(
+            r#"{"type":"assistant","timestamp":"2026-06-21T16:20:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"lead","description":"drive"}}]}}"#,
+        );
+        apply_main(&mut w, "S", &[root], &mut Vec::new());
+
+        // X's transcript arrives (sidecar names t1) and spawns a child via t9.
+        let x_spawn = e(
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:20:30.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Agent","input":{"subagent_type":"Explore","description":"dig"}}]}}"#,
+        );
+        apply_sub(&mut w, "S", "X", Some(&meta("t1", 1)), &[x_spawn], &mut Vec::new());
+
+        // The child's transcript arrives, its sidecar naming t9 at depth 2.
+        let child_work = e(
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:21:00.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t20","name":"Bash","input":{"command":"ls","description":"list"}}]}}"#,
+        );
+        apply_sub(&mut w, "S", "C", Some(&meta("t9", 2)), &[child_work], &mut Vec::new());
+
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.subagents.len(), 2);
+        let x = s.subagents.iter().find(|r| r.agent_id == "X").unwrap();
+        assert_eq!(x.parent_agent_id, None);
+        assert_eq!(x.spawn_depth, Some(1));
+        let c = s.subagents.iter().find(|r| r.agent_id == "C").unwrap();
+        assert_eq!(c.parent_agent_id.as_deref(), Some("X"));
+        assert_eq!(c.spawn_depth, Some(2));
+        assert_eq!(c.subagent_type.as_deref(), Some("Explore"));
+    }
+
+    /// The sidecar's toolUseId claims the matching pending run even when the
+    /// transcripts arrive in the opposite order of the spawn calls.
+    #[test]
+    fn sidecar_links_exact_run_out_of_order() {
+        let mut w = World::default();
+        let delegate = e(
+            r#"{"type":"assistant","timestamp":"2026-06-21T16:20:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"first"}},{"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"Plan","description":"second"}}]}}"#,
+        );
+        apply_main(&mut w, "S", &[delegate], &mut Vec::new());
+
+        let work = r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:20:30.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t30","name":"Bash","input":{"command":"ls","description":"list"}}]}}"#;
+        // The t2 agent's transcript arrives before the t1 agent's.
+        apply_sub(&mut w, "S", "B", Some(&meta("t2", 1)), &[e(work)], &mut Vec::new());
+        apply_sub(&mut w, "S", "A", Some(&meta("t1", 1)), &[e(work)], &mut Vec::new());
+
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.subagents.len(), 2);
+        let a = s.subagents.iter().find(|r| r.agent_id == "A").unwrap();
+        assert_eq!(a.description.as_deref(), Some("first"));
+        let b = s.subagents.iter().find(|r| r.agent_id == "B").unwrap();
+        assert_eq!(b.description.as_deref(), Some("second"));
+    }
+
+    /// When the spawned transcript is read before the caller's Agent tool_use
+    /// (startup scans don't order caller vs callee), the later call must enrich
+    /// the existing run — filling in the parent — instead of duplicating it.
+    #[test]
+    fn caller_call_after_transcript_enriches_instead_of_duplicating() {
+        let mut w = World::default();
+        // The child's transcript arrives first: fresh run with meta only.
+        let child_work = e(
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:21:00.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t20","name":"Bash","input":{"command":"ls","description":"list"}}]}}"#,
+        );
+        apply_sub(&mut w, "S", "C", Some(&meta("t9", 2)), &[child_work], &mut Vec::new());
+        assert_eq!(
+            w.sessions.get("S").unwrap().subagents[0].parent_agent_id,
+            None
+        );
+
+        // The caller's transcript (spawning t9) is read afterwards.
+        let x_spawn = e(
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:20:30.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Agent","input":{"subagent_type":"Explore","description":"dig"}}]}}"#,
+        );
+        apply_sub(&mut w, "S", "X", Some(&meta("t1", 1)), &[x_spawn], &mut Vec::new());
+
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.subagents.len(), 2, "no duplicate pending run for t9");
+        let c = s.subagents.iter().find(|r| r.agent_id == "C").unwrap();
+        assert_eq!(c.parent_agent_id.as_deref(), Some("X"), "parent filled retroactively");
+    }
+
+    /// A sidecar naming a call that was never seen (caller transcript outside the
+    /// restore window) must not steal another spawn's pending run.
+    #[test]
+    fn sidecar_with_unseen_call_creates_fresh_run() {
+        let mut w = World::default();
+        let delegate = e(
+            r#"{"type":"assistant","timestamp":"2026-06-21T16:20:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"pending"}}]}}"#,
+        );
+        apply_main(&mut w, "S", &[delegate], &mut Vec::new());
+
+        let work = e(
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-21T16:20:30.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t31","name":"Bash","input":{"command":"ls","description":"list"}}]}}"#,
+        );
+        apply_sub(&mut w, "S", "Z", Some(&meta("t99", 2)), &[work], &mut Vec::new());
+
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.subagents.len(), 2, "the pending t1 run stays reserved");
+        assert!(s.subagents.iter().any(|r| r.agent_id.is_empty()));
+        let z = s.subagents.iter().find(|r| r.agent_id == "Z").unwrap();
+        assert_eq!(z.spawn_depth, Some(2));
+        assert_eq!(z.tool_use_id.as_deref(), Some("t99"));
+        assert_eq!(z.parent_agent_id, None, "caller unknown, so no parent is claimed");
     }
 
     /// Verifies running a real session JSONL through the full parse -> classify -> state-tracking pipeline.
@@ -696,7 +911,7 @@ mod tests {
         let mut w = World::default();
         let skill = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-22T02:00:00.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"example-tools:slack-post"}}]}}"#);
         let read = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-22T02:00:05.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/a/y.ts"}}]}}"#);
-        apply_sub(&mut w, "S", "aid1", &[skill, read], &mut Vec::new());
+        apply_sub(&mut w, "S", "aid1", None, &[skill, read], &mut Vec::new());
         let s = w.sessions.get("S").unwrap();
         assert_eq!(s.subagents[0].current.kind, WorkKind::Reading);
         assert_eq!(s.subagents[0].current.active_skill.as_deref(), Some("slack-post"));
@@ -709,7 +924,7 @@ mod tests {
     fn sub_agent_captures_runtime_model() {
         let mut w = World::default();
         let work = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-25T01:00:00.000Z","sessionId":"S","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a/x.ts"}}]}}"#);
-        apply_sub(&mut w, "S", "aid1", &[work], &mut Vec::new());
+        apply_sub(&mut w, "S", "aid1", None, &[work], &mut Vec::new());
         let s = w.sessions.get("S").unwrap();
         assert_eq!(
             s.subagents[0].model.as_deref(),
@@ -814,7 +1029,7 @@ mod tests {
         let mut w = World::default();
         let todo = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-23T01:00:00.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"TodoWrite","input":{"todos":[{"content":"a","status":"in_progress","activeForm":"aing"}]}}]}}"#);
         let read = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-23T01:00:05.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/a/y.ts"}}]}}"#);
-        apply_sub(&mut w, "S", "aid1", &[todo, read], &mut Vec::new());
+        apply_sub(&mut w, "S", "aid1", None, &[todo, read], &mut Vec::new());
         let s = w.sessions.get("S").unwrap();
         assert_eq!(s.subagents[0].current.kind, WorkKind::Reading);
         assert_eq!(s.subagents[0].current.todos.len(), 1);
@@ -889,7 +1104,7 @@ mod tests {
         let work = e(r#"{"type":"assistant","isSidechain":true,"agentId":"aid1","timestamp":"2026-06-25T01:01:00.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#);
         let end = e(r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-06-25T01:01:05.000Z","sessionId":"S"}"#);
         let mut out = Vec::new();
-        apply_sub(&mut w, "S", "aid1", &[work, end], &mut out);
+        apply_sub(&mut w, "S", "aid1", None, &[work, end], &mut out);
         let kinds: Vec<&str> = out.iter().map(|h| h.event.as_str()).collect();
         assert_eq!(kinds, vec!["PreToolUse", "SubagentStop"]);
         assert!(out.iter().all(|h| h.agent_id.as_deref() == Some("aid1")));

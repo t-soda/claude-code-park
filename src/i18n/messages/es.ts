@@ -67,6 +67,7 @@ export const es: Messages = {
     displaySection: "Ajustes de visualización",
     showHookViz:
       "Mostrar la visualización de hooks (raíles y haces de disparo) en el Pueblo",
+    showDelegationLines: "Mostrar las líneas de delegación entre subagentes en el Pueblo",
     showToolNames: "Mostrar el nombre de las herramientas en el registro",
     showTrayIcon: "Mostrar el icono en la barra de menús",
     characterEditor: "Editor de personajes",
@@ -222,6 +223,9 @@ export const es: Messages = {
 
   office: {
     unregistered: "Sin registrar",
+    orchestrator: "Orchestrator",
+    delegatedBy: "Llamado por: {name}",
+    delegatesTo: "Llama a: {name}",
     quietTitle: "El Pueblo está tranquilo ahora 🌙",
     quietBody:
       "Ejecuta Claude Code en tu terminal y aquí aparecerá el Orchestrator que empezará a trabajar.",

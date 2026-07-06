@@ -66,6 +66,7 @@ export const fr: Messages = {
       "Configurez l'affichage de l'écran de la Ville et l'apparence des personnages.",
     displaySection: "Affichage",
     showHookViz: "Afficher la visualisation des hooks (rails, faisceaux) dans la Ville",
+    showDelegationLines: "Afficher les lignes de délégation entre sous-agents dans la Ville",
     showToolNames: "Afficher le nom des outils dans le journal",
     showTrayIcon: "Afficher l'icône dans la barre de menus",
     characterEditor: "Éditeur de personnage",
@@ -219,6 +220,9 @@ export const fr: Messages = {
 
   office: {
     unregistered: "Non enregistré",
+    orchestrator: "Orchestrator",
+    delegatedBy: "Appelé par : {name}",
+    delegatesTo: "Appelle : {name}",
     quietTitle: "La Ville est calme pour l'instant 🌙",
     quietBody:
       "Lancez Claude Code dans votre terminal et l'Orchestrator apparaîtra ici pour se mettre au travail.",

@@ -65,6 +65,7 @@ export const de: Messages = {
     subtitle: "Konfiguriere die Anzeige der Stadt-Ansicht und das Aussehen der Charaktere.",
     displaySection: "Anzeigeeinstellungen",
     showHookViz: "hook-Visualisierung (Schienen, Auslöse-Strahlen) in der Stadt anzeigen",
+    showDelegationLines: "Delegationslinien zwischen Subagenten in der Stadt anzeigen",
     showToolNames: "Werkzeugnamen im Log anzeigen",
     showTrayIcon: "Symbol in der Menüleiste anzeigen",
     characterEditor: "Charakter-Editor",
@@ -215,6 +216,9 @@ export const de: Messages = {
 
   office: {
     unregistered: "Nicht registriert",
+    orchestrator: "Orchestrator",
+    delegatedBy: "Aufgerufen von: {name}",
+    delegatesTo: "Ruft auf: {name}",
     quietTitle: "In der Stadt ist es gerade ruhig 🌙",
     quietBody:
       "Führe Claude Code im Terminal aus, dann erscheint hier der Orchestrator und beginnt zu arbeiten.",

@@ -40,20 +40,39 @@ export function parseTrayEnabledPref(raw: string | null): boolean {
   }
 }
 
-function load(): { lifecycleView: boolean; hookView: boolean; trayEnabled: boolean } {
+/** Pure function reading delegationView from the persisted JSON (missing key defaults to true; only an explicit false is false). */
+export function parseDelegationViewPref(raw: string | null): boolean {
+  if (!raw) return true;
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    return obj?.delegationView !== false;
+  } catch {
+    return true;
+  }
+}
+
+interface PersistedPrefs {
+  lifecycleView: boolean;
+  hookView: boolean;
+  trayEnabled: boolean;
+  delegationView: boolean;
+}
+
+function load(): PersistedPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return {
       lifecycleView: parseLifecyclePref(raw),
       hookView: parseHookViewPref(raw),
       trayEnabled: parseTrayEnabledPref(raw),
+      delegationView: parseDelegationViewPref(raw),
     };
   } catch {
-    return { lifecycleView: true, hookView: true, trayEnabled: true };
+    return { lifecycleView: true, hookView: true, trayEnabled: true, delegationView: true };
   }
 }
 
-function persist(state: { lifecycleView: boolean; hookView: boolean; trayEnabled: boolean }): void {
+function persist(state: PersistedPrefs): void {
   try {
     localStorage.setItem(
       STORAGE_KEY,
@@ -61,6 +80,7 @@ function persist(state: { lifecycleView: boolean; hookView: boolean; trayEnabled
         lifecycleView: state.lifecycleView,
         hookView: state.hookView,
         trayEnabled: state.trayEnabled,
+        delegationView: state.delegationView,
       })
     );
   } catch {
@@ -81,6 +101,9 @@ interface UiPrefsState {
    * way to flip this pref without also syncing the actual icon. */
   trayEnabled: boolean;
   setTrayEnabled: (on: boolean) => void;
+  /** Whether the subagent delegation arcs are always shown in the town (hover still reveals them when off). */
+  delegationView: boolean;
+  setDelegationView: (on: boolean) => void;
 }
 
 export const useUiPrefsStore = create<UiPrefsState>((set, get) => ({
@@ -97,5 +120,9 @@ export const useUiPrefsStore = create<UiPrefsState>((set, get) => ({
     set({ trayEnabled: on });
     persist(get());
     api.setTrayEnabled(on).catch((e) => console.error("Failed to toggle the tray icon:", e));
+  },
+  setDelegationView(on) {
+    set({ delegationView: on });
+    persist(get());
   },
 }));

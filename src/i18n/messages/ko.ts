@@ -65,6 +65,7 @@ export const ko: Messages = {
     subtitle: "타운 화면의 표시 관련 설정과 캐릭터 외형을 설정합니다.",
     displaySection: "표시 설정",
     showHookViz: "hook 시각화(레일・발화 빔)를 타운에 표시",
+    showDelegationLines: "서브 에이전트 간 위임 선을 타운에 표시",
     showToolNames: "로그에 도구 이름 표시",
     showTrayIcon: "메뉴 막대에 아이콘 표시",
     characterEditor: "캐릭터 에디터",
@@ -215,6 +216,9 @@ export const ko: Messages = {
 
   office: {
     unregistered: "등록 없음",
+    orchestrator: "Orchestrator",
+    delegatedBy: "호출자: {name}",
+    delegatesTo: "호출 대상: {name}",
     quietTitle: "지금 타운은 조용합니다 🌙",
     quietBody:
       "터미널에서 Claude Code를 실행하면 여기에 Orchestrator가 나타나 일을 시작합니다.",

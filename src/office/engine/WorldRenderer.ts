@@ -21,8 +21,10 @@ import { RoomSign } from "./RoomSign";
 import { EmployeeSprite } from "./EmployeeSprite";
 import { OrchestratorSprite } from "./OrchestratorSprite";
 import { makeWander, stepWander, type WanderState, type CellRect } from "./Wanderer";
+import { t as tr } from "../../i18n";
 import { HookRail } from "./HookRail";
 import { HookBeam, pairKey } from "./HookBeam";
+import { DelegationArcs, type ArcLink } from "./DelegationArc";
 import { groupBySlot, eventToSlotIndex, matchingHooks, type SlotGroup } from "../hookLifecycle";
 import type { EffectiveHooks } from "../../ipc/commands";
 
@@ -66,6 +68,8 @@ interface RoomView {
   rail: HookRail;
   /** This session's cwd (lookup key for effective hooks). */
   project: string;
+  /** Who spawned each live run. parent null = spawned by the orchestrator. */
+  delegations: Array<{ parent: string | null; child: string }>;
 }
 
 /** Whether working (fixed seat) or not. Idle and non-Active wander. */
@@ -128,6 +132,12 @@ export class WorldRenderer {
   private beam = new HookBeam();
   /** Whether to show hook visualization (rail + badge + beam). OfficeView reflects uiPrefs. */
   private hookView = true;
+  /** Arcs between delegating subagents (behind callouts/beams). */
+  private delegationArcs = new DelegationArcs();
+  /** Whether delegation arcs are always shown. When off, only a hovered agent's arcs appear. */
+  private delegationView = true;
+  /** The character the pointer is over (for arc emphasis). */
+  private delegationHover: { sessionId: string; agentId: string } | null = null;
 
   /** Most recent town layout (used to redraw the floor when the time of day changes). */
   private lastPlaced: PlacedRoom[] = [];
@@ -145,6 +155,7 @@ export class WorldRenderer {
   ) {
     this.showSignIcons = opts?.showSignIcons ?? true;
     this.contentLayer.sortableChildren = true;
+    this.calloutLayer.addChild(this.delegationArcs);
     this.calloutLayer.addChild(this.tetherG);
     this.calloutLayer.addChild(this.beam);
     this.scene.addChild(this.floor, this.contentLayer, this.signLayer, this.calloutLayer);
@@ -342,6 +353,7 @@ export class WorldRenderer {
           furnitureSig: "",
           rail,
           project: session.project,
+          delegations: [],
         };
         this.views.set(session.session_id, st);
         orchFresh = true;
@@ -373,6 +385,12 @@ export class WorldRenderer {
           sprite.apply(run);
         }
       });
+
+      // Delegation pairs among the live runs. A missing parent_agent_id means the
+      // orchestrator spawned the run (parent null).
+      st.delegations = runs
+        .filter((r) => r.agent_id)
+        .map((r) => ({ parent: r.parent_agent_id, child: r.agent_id }));
 
       // Room layout calculation (working = fixed desk, idle = wandering in the waiting area).
       const workingSorted = runs
@@ -627,6 +645,76 @@ export class WorldRenderer {
     this.beam.visible = on;
   }
 
+  /** Set whether delegation arcs are always shown (hover-only when off). */
+  setDelegationView(on: boolean) {
+    this.delegationView = on;
+  }
+
+  /** The character the pointer is over (null clears the arc emphasis). */
+  setDelegationHover(target: { sessionId: string; agentId: string } | null) {
+    this.delegationHover = target;
+  }
+
+  /**
+   * Who called this subagent / whom it called, as display labels. The caller is
+   * "Orchestrator" for orchestrator-spawned runs. Null when the run is unknown.
+   */
+  delegationInfo(
+    sessionId: string,
+    agentId: string
+  ): { caller: string | null; callees: string[] } | null {
+    const st = this.views.get(sessionId);
+    if (!st) return null;
+    const rel = st.delegations.find((d) => d.child === agentId);
+    const callees = st.delegations.filter((d) => d.parent === agentId).map((d) => d.child);
+    if (!rel && callees.length === 0) return null;
+    const label = (key: string) => st.employees.get(key)?.label ?? key;
+    return {
+      caller: rel ? (rel.parent === null ? tr("office.orchestrator") : label(rel.parent)) : null,
+      callees: callees.map(label),
+    };
+  }
+
+  /** Build this frame's arc links (world space) from the per-room delegation pairs.
+   *  Idle/wandering agents are included: sprites exist for every non-Ended run. */
+  private collectArcLinks(): ArcLink[] {
+    const links: ArcLink[] = [];
+    const hover = this.delegationHover;
+    for (const st of this.views.values()) {
+      if (st.delegations.length === 0) continue;
+      const sid = st.orch.sessionId;
+      for (const d of st.delegations) {
+        // parent null = the orchestrator is the caller.
+        const from = d.parent === null ? st.orch : st.employees.get(d.parent);
+        const to = st.employees.get(d.child);
+        if (!from || !to) continue;
+        // Only a hover within this same room affects its beams: hovering an agent
+        // in another session must not dim unrelated rooms' delegations.
+        const inHover = hover !== null && hover.sessionId === sid;
+        // Hovering the orchestrator never matches an agent_id, so it emphasizes
+        // nothing (its own outgoing beams stay "normal") by design.
+        const hovered = inHover && (hover.agentId === d.parent || hover.agentId === d.child);
+        // Lines toggled off: hovering a character still reveals its own relations.
+        if (!this.delegationView && !hovered) continue;
+        // "in" = the hovered agent is being called on this beam, "out" = it is calling.
+        // Non-hovered beams in the hovered room dim; other rooms stay normal.
+        const emphasis = hovered
+          ? hover!.agentId === d.child
+            ? "in"
+            : "out"
+          : inHover
+            ? "dim"
+            : "normal";
+        links.push({
+          from: { x: from.x, y: from.y + from.headOffsetY },
+          to: { x: to.x, y: to.y + to.headOffsetY },
+          emphasis,
+        });
+      }
+    }
+    return links;
+  }
+
   /** Reflect per-project effective hooks onto each room's rail. */
   applyEffectiveHooks(byProject: Record<string, EffectiveHooks>) {
     if (!this.hookView) return;
@@ -727,11 +815,15 @@ export class WorldRenderer {
       const wait = this.waitRect(st);
       // Orchestrator: working uses the Orchestrator seat (facing into the room), idle wanders the waiting area.
       const presCell = st.orchestratorWorking ? st.plan.orchestrator : null;
-      this.drive(st, ORCHESTRATOR_KEY, st.orch, presCell, st.plan.orchestratorFacing, wait, t, dt);
+      this.drive(st, ORCHESTRATOR_KEY, st.orch, presCell, st.plan.orchestratorFacing, wait, t, dt, false);
       // Employees: a fixed seat (with facing) if they have a desk, otherwise wandering the waiting area.
+      const hover = this.delegationHover;
       for (const [key, emp] of st.employees) {
         const slot = st.plan.desks.get(key) ?? null;
-        this.drive(st, key, emp, slot?.cell ?? null, slot?.facing ?? null, wait, t, dt);
+        // A hovered wanderer stands still so it can't walk out from under the pointer.
+        const frozen =
+          hover !== null && hover.sessionId === st.orch.sessionId && hover.agentId === key;
+        this.drive(st, key, emp, slot?.cell ?? null, slot?.facing ?? null, wait, t, dt, frozen);
       }
       st.orch.update(t);
       for (const e of st.employees.values()) e.update(t);
@@ -739,6 +831,7 @@ export class WorldRenderer {
 
     for (const st of this.views.values()) st.rail.update(t);
     this.beam.update(t);
+    this.delegationArcs.update(this.collectArcLinks(), t);
     this.placeCallouts(dt);
     this.drawDialogTether();
   }
@@ -752,7 +845,8 @@ export class WorldRenderer {
     seatFacing: Orientation | null,
     wait: CellRect,
     t: number,
-    dt: number
+    dt: number,
+    frozen: boolean
   ) {
     let gx: number;
     let gy: number;
@@ -786,7 +880,8 @@ export class WorldRenderer {
     } else {
       let ws = st.wander.get(key);
       if (!ws) ws = makeWander(wait, Math.random);
-      ws = stepWander(ws, wait, t, dt, Math.random);
+      // stepWander integrates by dt, so skipping it freezes in place with no jump on resume.
+      if (!frozen) ws = stepWander(ws, wait, t, dt, Math.random);
       st.wander.set(key, ws);
       const w = cellToWorld(ws.col, ws.row); // absolute cell
       gx = w.x;

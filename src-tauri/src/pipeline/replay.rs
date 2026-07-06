@@ -1,4 +1,5 @@
 use crate::jsonl::entry::RawEntry;
+use crate::jsonl::meta::SubAgentMeta;
 use crate::model::replay::{
     ReplayData, ReplayEvent, ReplayEventKind, ReplaySessionMeta, ReplaySubagent,
 };
@@ -7,13 +8,26 @@ use chrono::DateTime;
 /// Maximum number of characters kept from a user prompt / spawn description.
 pub(crate) const EXCERPT_CHARS: usize = 200;
 
-/// A subagent spawn recorded from the main file's Agent/Task tool_use,
-/// waiting to be linked to a sub JSONL file in assemble().
+/// A subagent spawn recorded from an Agent/Task tool_use (in the main file or,
+/// for nested delegation, in another subagent's file), waiting to be linked to
+/// a sub JSONL file in assemble().
 #[derive(Debug, Clone)]
 pub struct PendingSpawn {
     pub at_ms: f64,
     pub subagent_type: Option<String>,
     pub description: Option<String>,
+    /// The Agent tool_use's block id (matched against the sidecar meta's toolUseId).
+    pub tool_use_id: Option<String>,
+    /// agent_id of the spawning subagent. None = the main session (orchestrator).
+    pub caller: Option<String>,
+}
+
+/// One subagent transcript handed to assemble(): its id, sidecar meta (when the
+/// agent-{id}.meta.json exists), and the folded event stream.
+pub struct SubFile {
+    pub agent_id: String,
+    pub meta: Option<SubAgentMeta>,
+    pub built: BuiltFile,
 }
 
 /// The result of folding one JSONL file. Event timestamps are absolute epoch ms
@@ -21,7 +35,8 @@ pub struct PendingSpawn {
 #[derive(Debug, Default)]
 pub struct BuiltFile {
     pub events: Vec<ReplayEvent>,
-    /// Main file only: spawns recorded from Agent/Task tool_use blocks.
+    /// Spawns recorded from Agent/Task tool_use blocks (main and sub files alike;
+    /// a sub file's spawns are nested delegation).
     pub spawns: Vec<PendingSpawn>,
     pub first_ts_ms: Option<f64>,
     pub last_ts_ms: Option<f64>,
@@ -74,7 +89,8 @@ impl ReplayBuilder {
         };
         self.out.first_ts_ms.get_or_insert(at_ms);
         self.out.last_ts_ms = Some(at_ms);
-        self.absorb_meta(e, at_ms);
+        self.absorb_meta(e);
+        self.record_spawns(e, at_ms);
 
         self.active_skill = super::timeline::next_skill(e, self.active_skill.take());
 
@@ -139,7 +155,43 @@ impl ReplayBuilder {
         self.out
     }
 
-    fn absorb_meta(&mut self, e: &RawEntry, at_ms: f64) {
+    /// Agent/Task tool_use -> a subagent spawn. One assistant entry may spawn
+    /// several agents in parallel, so scan every block. Sub files record these
+    /// too: a subagent spawning an agent is nested delegation, and this builder's
+    /// agent_id becomes the caller.
+    fn record_spawns(&mut self, e: &RawEntry, at_ms: f64) {
+        for tb in e.blocks() {
+            if tb.block_type.as_deref() != Some("tool_use") {
+                continue;
+            }
+            if !matches!(tb.name.as_deref(), Some("Agent") | Some("Task")) {
+                continue;
+            }
+            let subagent_type = input_str(tb, "subagent_type");
+            let description = input_str(tb, "description");
+            self.out.spawns.push(PendingSpawn {
+                at_ms,
+                subagent_type: subagent_type.clone(),
+                description: description.clone(),
+                tool_use_id: tb.id.clone(),
+                caller: self.agent_id.clone(),
+            });
+            self.out.events.push(ReplayEvent {
+                at_ms,
+                kind: ReplayEventKind::SubagentSpawn,
+                agent_id: self.agent_id.clone(),
+                work: None,
+                tool_name: None,
+                detail: subagent_type,
+                active_skill: None,
+                correlation_id: None,
+                is_error: None,
+                text: description.map(|d| excerpt(&d, EXCERPT_CHARS)),
+            });
+        }
+    }
+
+    fn absorb_meta(&mut self, e: &RawEntry) {
         if self.agent_id.is_some() {
             // Record the model the assistant entry actually used, like apply_sub does
             // (set as soon as known, then keep updating with later values).
@@ -171,40 +223,17 @@ impl ReplayBuilder {
                 self.out.first_prompt = Some(excerpt(text, EXCERPT_CHARS));
             }
         }
-        // Agent/Task tool_use -> a subagent spawn (main session only).
-        if let Some(tb) = e.last_tool_use() {
-            let name = tb.name.as_deref().unwrap_or("");
-            if name == "Agent" || name == "Task" {
-                let subagent_type = input_str(tb, "subagent_type");
-                let description = input_str(tb, "description");
-                self.out.spawns.push(PendingSpawn {
-                    at_ms,
-                    subagent_type: subagent_type.clone(),
-                    description: description.clone(),
-                });
-                self.out.events.push(ReplayEvent {
-                    at_ms,
-                    kind: ReplayEventKind::SubagentSpawn,
-                    agent_id: None,
-                    work: None,
-                    tool_name: None,
-                    detail: subagent_type,
-                    active_skill: None,
-                    correlation_id: None,
-                    is_error: None,
-                    text: description.map(|d| excerpt(&d, EXCERPT_CHARS)),
-                });
-            }
-        }
     }
 }
 
 /// Assembles the main file and its sub files into a single ReplayData:
-/// links spawns to sub files chronologically (offline equivalent of the live
-/// arrival-order heuristic in find_or_create_run), rebases all timestamps onto
-/// the session start, and merge-sorts the event streams.
+/// links spawns to sub files by the sidecar meta's toolUseId when available
+/// (exact, any nesting depth), falling back to the chronological zip for legacy
+/// sessions without sidecars (offline equivalent of the live linking in
+/// find_or_create_run). Rebases all timestamps onto the session start and
+/// merge-sorts the event streams.
 /// Returns None when the main file yielded no timestamped entries.
-pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)>) -> Option<ReplayData> {
+pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<SubFile>) -> Option<ReplayData> {
     let started_at_ms = main.first_ts_ms?;
     let mut ended_at_ms = main.last_ts_ms.unwrap_or(started_at_ms);
 
@@ -223,20 +252,70 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)
     });
     events.extend(main.events);
 
-    // Chronological zip: spawns in main-file order vs sub files by first entry ts.
+    // All spawns: the main file's plus each sub file's (nested delegation).
     let mut spawns = main.spawns;
+    for sub in &subs {
+        spawns.extend(sub.built.spawns.iter().cloned());
+    }
     spawns.sort_by(|a, b| a.at_ms.total_cmp(&b.at_ms));
-    let mut sub_files: Vec<(String, BuiltFile)> = subs
+    let mut claimed = vec![false; spawns.len()];
+
+    let mut sub_files: Vec<SubFile> = subs
         .into_iter()
-        .filter(|(_, b)| b.first_ts_ms.is_some())
+        .filter(|s| s.built.first_ts_ms.is_some())
         .collect();
-    sub_files.sort_by(|a, b| a.1.first_ts_ms.unwrap().total_cmp(&b.1.first_ts_ms.unwrap()));
+    sub_files.sort_by(|a, b| {
+        a.built
+            .first_ts_ms
+            .unwrap()
+            .total_cmp(&b.built.first_ts_ms.unwrap())
+    });
+
+    // Pass 1: the sidecar meta names the exact spawning tool_use.
+    let mut spawn_idx: Vec<Option<usize>> = vec![None; sub_files.len()];
+    for (si, sub) in sub_files.iter().enumerate() {
+        let Some(tid) = sub.meta.as_ref().and_then(|m| m.tool_use_id.as_deref()) else {
+            continue;
+        };
+        let hit = spawns
+            .iter()
+            .enumerate()
+            .find_map(|(i, s)| (!claimed[i] && s.tool_use_id.as_deref() == Some(tid)).then_some(i));
+        if let Some(i) = hit {
+            claimed[i] = true;
+            spawn_idx[si] = Some(i);
+        }
+    }
+    // Pass 2: legacy chronological zip for sub files without a sidecar. A sidecar
+    // naming an unseen call keeps its file unlinked rather than stealing another
+    // spawn (mirrors the live find_or_create_run behavior).
+    let mut next = 0usize;
+    for (si, sub) in sub_files.iter().enumerate() {
+        if spawn_idx[si].is_some()
+            || sub.meta.as_ref().and_then(|m| m.tool_use_id.as_ref()).is_some()
+        {
+            continue;
+        }
+        while next < spawns.len() && claimed[next] {
+            next += 1;
+        }
+        if next >= spawns.len() {
+            break;
+        }
+        claimed[next] = true;
+        spawn_idx[si] = Some(next);
+    }
 
     let mut subagents: Vec<ReplaySubagent> = Vec::new();
-    let n_linked = spawns.len().min(sub_files.len());
-    for (i, (agent_id, mut built)) in sub_files.into_iter().enumerate() {
-        let spawn = spawns.get(i);
+    for (si, sub) in sub_files.into_iter().enumerate() {
+        let SubFile {
+            agent_id,
+            meta,
+            mut built,
+        } = sub;
+        let spawn = spawn_idx[si].map(|i| spawns[i].clone());
         let spawn_ms = spawn
+            .as_ref()
             .map(|s| s.at_ms)
             .unwrap_or_else(|| built.first_ts_ms.unwrap());
         let stop_ms = built.last_ts_ms.unwrap_or(spawn_ms);
@@ -260,16 +339,27 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)
         events.extend(built.events);
         subagents.push(ReplaySubagent {
             agent_id,
-            subagent_type: spawn.and_then(|s| s.subagent_type.clone()),
-            description: spawn.and_then(|s| s.description.clone()),
+            subagent_type: spawn
+                .as_ref()
+                .and_then(|s| s.subagent_type.clone())
+                .or_else(|| meta.as_ref().and_then(|m| m.agent_type.clone())),
+            description: spawn
+                .as_ref()
+                .and_then(|s| s.description.clone())
+                .or_else(|| meta.as_ref().and_then(|m| m.description.clone())),
             model: built.model,
             spawn_ms,
             stop_ms,
+            parent_agent_id: spawn.as_ref().and_then(|s| s.caller.clone()),
+            spawn_depth: meta.as_ref().and_then(|m| m.spawn_depth),
         });
     }
     // Spawns with no sub file (e.g. inline agents that never wrote a transcript):
     // log-only, no sprite (empty agent_id, mirroring the live unlinked-run convention).
-    for spawn in spawns.into_iter().skip(n_linked) {
+    for (i, spawn) in spawns.into_iter().enumerate() {
+        if claimed[i] {
+            continue;
+        }
         subagents.push(ReplaySubagent {
             agent_id: String::new(),
             subagent_type: spawn.subagent_type,
@@ -277,6 +367,8 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<(String, BuiltFile)
             model: None,
             spawn_ms: spawn.at_ms,
             stop_ms: spawn.at_ms,
+            parent_agent_id: spawn.caller,
+            spawn_depth: None,
         });
     }
 
@@ -367,6 +459,29 @@ mod tests {
             b.push(&e(j));
         }
         b.finish()
+    }
+
+    /// SubFile with no sidecar meta (legacy chronological-zip path).
+    fn sub_nometa(agent_id: &str, built: BuiltFile) -> SubFile {
+        SubFile {
+            agent_id: agent_id.to_string(),
+            meta: None,
+            built,
+        }
+    }
+
+    /// SubFile whose sidecar meta names the spawning tool_use id and spawn depth.
+    fn sub_meta(agent_id: &str, tool_use_id: &str, depth: u32, built: BuiltFile) -> SubFile {
+        SubFile {
+            agent_id: agent_id.to_string(),
+            meta: Some(SubAgentMeta {
+                agent_type: None,
+                description: None,
+                tool_use_id: Some(tool_use_id.to_string()),
+                spawn_depth: Some(depth),
+            }),
+            built,
+        }
     }
 
     const T0: &str = "2026-06-25T01:00:00.000Z";
@@ -482,7 +597,7 @@ mod tests {
         let data = assemble(
             "SID",
             main,
-            vec![("A".into(), sub_a.finish()), ("B".into(), sub_b.finish())],
+            vec![sub_nometa("A", sub_a.finish()), sub_nometa("B", sub_b.finish())],
         )
         .expect("assembles");
 
@@ -501,6 +616,75 @@ mod tests {
         assert_eq!(spawn_events.len(), 2);
         assert_eq!(spawn_events[0].detail.as_deref(), Some("reviewer"));
         assert_eq!(spawn_events[0].text.as_deref(), Some("review the diff"));
+        // Both were spawned by the main session, so neither has a parent.
+        assert!(data.subagents.iter().all(|s| s.parent_agent_id.is_none()));
+    }
+
+    /// The sidecar meta's toolUseId links each transcript to its exact spawn,
+    /// even when the chronological order would pair them differently.
+    #[test]
+    fn links_subagents_by_sidecar_tool_use_id() {
+        let main = build_main(&[
+            &format!(r#"{{"type":"assistant","timestamp":"{T0}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c1","name":"Agent","input":{{"subagent_type":"reviewer","description":"review"}}}},{{"type":"tool_use","id":"c2","name":"Agent","input":{{"subagent_type":"explorer","description":"scan"}}}}]}}}}"#),
+        ]);
+        assert_eq!(main.spawns.len(), 2);
+
+        // A starts later but its sidecar names c1 (reviewer); B starts earlier but
+        // names c2 (explorer). Chronological zip would swap them — sidecars must win.
+        let mut sub_a = ReplayBuilder::new_sub("A");
+        sub_a.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T2}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"s1","name":"Read","input":{{"file_path":"/a/y.ts"}}}}]}}}}"#)));
+        let mut sub_b = ReplayBuilder::new_sub("B");
+        sub_b.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T1}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"s2","name":"Grep","input":{{"pattern":"foo"}}}}]}}}}"#)));
+
+        let data = assemble(
+            "SID",
+            main,
+            vec![
+                sub_meta("A", "c1", 1, sub_a.finish()),
+                sub_meta("B", "c2", 1, sub_b.finish()),
+            ],
+        )
+        .expect("assembles");
+
+        let a = data.subagents.iter().find(|s| s.agent_id == "A").unwrap();
+        assert_eq!(a.subagent_type.as_deref(), Some("reviewer"), "c1 -> reviewer");
+        assert_eq!(a.spawn_depth, Some(1));
+        assert_eq!(a.parent_agent_id, None);
+        let b = data.subagents.iter().find(|s| s.agent_id == "B").unwrap();
+        assert_eq!(b.subagent_type.as_deref(), Some("explorer"), "c2 -> explorer");
+    }
+
+    /// A subagent that spawns another agent records itself as the parent, and the
+    /// child's sidecar links it to that nested Agent call (any depth).
+    #[test]
+    fn links_nested_delegation() {
+        let main = build_main(&[
+            &format!(r#"{{"type":"assistant","timestamp":"{T0}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c1","name":"Agent","input":{{"subagent_type":"lead","description":"drive"}}}}]}}}}"#),
+        ]);
+
+        // The lead (A) spawns a child via nested Agent call c9.
+        let mut lead = ReplayBuilder::new_sub("A");
+        lead.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T1}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c9","name":"Agent","input":{{"subagent_type":"explore","description":"dig"}}}}]}}}}"#)));
+        // The child (B), its sidecar naming c9 at depth 2.
+        let mut child = ReplayBuilder::new_sub("B");
+        child.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T2}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"s1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#)));
+
+        let data = assemble(
+            "SID",
+            main,
+            vec![
+                sub_meta("A", "c1", 1, lead.finish()),
+                sub_meta("B", "c9", 2, child.finish()),
+            ],
+        )
+        .expect("assembles");
+
+        let a = data.subagents.iter().find(|s| s.agent_id == "A").unwrap();
+        assert_eq!(a.parent_agent_id, None, "lead spawned by the orchestrator");
+        let b = data.subagents.iter().find(|s| s.agent_id == "B").unwrap();
+        assert_eq!(b.parent_agent_id.as_deref(), Some("A"), "child spawned by the lead");
+        assert_eq!(b.spawn_depth, Some(2));
+        assert_eq!(b.subagent_type.as_deref(), Some("explore"));
     }
 
     /// A sub file without a turn_end gets a synthesized SubagentStop at its last ts.
@@ -512,7 +696,7 @@ mod tests {
         let mut sub = ReplayBuilder::new_sub("A");
         sub.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T1}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"s1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#)));
 
-        let data = assemble("SID", main, vec![("A".into(), sub.finish())]).expect("assembles");
+        let data = assemble("SID", main, vec![sub_nometa("A", sub.finish())]).expect("assembles");
         let stop = data
             .events
             .iter()
@@ -533,7 +717,7 @@ mod tests {
         )]);
         let mut sub = ReplayBuilder::new_sub("A");
         sub.push(&e(&format!(r#"{{"type":"system","subtype":"turn_duration","timestamp":"{T1}"}}"#)));
-        let data = assemble("SID", main, vec![("A".into(), sub.finish())]).expect("assembles");
+        let data = assemble("SID", main, vec![sub_nometa("A", sub.finish())]).expect("assembles");
         let stops = data
             .events
             .iter()
