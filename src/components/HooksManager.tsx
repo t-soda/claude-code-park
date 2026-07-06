@@ -52,9 +52,15 @@ export function HooksManager({ project }: { project?: string }) {
   useEffect(() => {
     // Force a fresh read every time the panel opens so externally edited settings.json /
     // settings.local.json are reflected (the cache would otherwise keep a stale/empty result).
+    // Deliberately keyed only on effKey: src.reload (from useConfigSource) is a new closure on
+    // every render, so including it here would retrigger the effect every render -> reload()
+    // updates state -> re-render -> new closure -> loop forever, freezing the page. eff.reload
+    // (a Zustand store method) is already stable and is omitted here only for lint-suppression
+    // symmetry, not because it shares that instability.
     src.reload();
     eff.reload([effKey]);
-  }, [src.reload, eff.reload, effKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effKey]);
 
   const [event, setEvent] = useState<string>(EVENTS[0]);
   const [matcher, setMatcher] = useState("");
