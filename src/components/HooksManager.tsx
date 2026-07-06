@@ -52,9 +52,13 @@ export function HooksManager({ project }: { project?: string }) {
   useEffect(() => {
     // Force a fresh read every time the panel opens so externally edited settings.json /
     // settings.local.json are reflected (the cache would otherwise keep a stale/empty result).
+    // Deliberately keyed only on effKey: src.reload/eff.reload are recreated on every render
+    // (they wrap store state that reload() itself just updated), so including them here would
+    // retrigger the effect on every render and loop forever.
     src.reload();
     eff.reload([effKey]);
-  }, [src.reload, eff.reload, effKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effKey]);
 
   const [event, setEvent] = useState<string>(EVENTS[0]);
   const [matcher, setMatcher] = useState("");
