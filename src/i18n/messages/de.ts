@@ -67,6 +67,7 @@ export const de: Messages = {
     showHookViz: "hook-Visualisierung (Schienen, Auslöse-Strahlen) in der Stadt anzeigen",
     showDelegationLines: "Delegationslinien zwischen Subagenten in der Stadt anzeigen",
     showToolNames: "Werkzeugnamen im Log anzeigen",
+    showTrayIcon: "Symbol in der Menüleiste anzeigen",
     characterEditor: "Charakter-Editor",
     languageSection: "Sprache",
     languageLabel: "Anzeigesprache",

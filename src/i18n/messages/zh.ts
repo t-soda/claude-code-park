@@ -67,6 +67,7 @@ export const zh: Messages = {
     showHookViz: "在小镇中显示 hook 可视化（轨道・触发光束）",
     showDelegationLines: "在小镇中显示子代理之间的委派连线",
     showToolNames: "在日志中显示工具名称",
+    showTrayIcon: "在菜单栏中显示图标",
     characterEditor: "角色编辑器",
     languageSection: "语言",
     languageLabel: "显示语言",

@@ -6,4 +6,5 @@ pub mod replay_cmd;
 pub mod session_cmd;
 pub mod skills_cmd;
 pub mod terminal_cmd;
+pub mod tray_cmd;
 pub mod world_cmd;

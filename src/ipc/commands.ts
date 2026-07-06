@@ -79,4 +79,7 @@ export const api = {
   focusTerminal(sessionId: string, project: string): Promise<FocusResult> {
     return invoke<FocusResult>("focus_terminal", { sessionId, project });
   },
+  setTrayEnabled(enabled: boolean): Promise<void> {
+    return invoke<void>("set_tray_enabled", { enabled });
+  },
 };

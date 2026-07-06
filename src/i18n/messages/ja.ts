@@ -71,6 +71,7 @@ export const ja = {
     showHookViz: "hook 可視化（レール・発火ビーム）をタウンに表示する",
     showDelegationLines: "サブエージェント間の呼び出し線をタウンに表示する",
     showToolNames: "ログにツール名を表示する",
+    showTrayIcon: "メニューバーにアイコンを表示する",
     characterEditor: "キャラクターエディタ",
     languageSection: "言語",
     languageLabel: "表示言語",

@@ -67,6 +67,7 @@ export const en: Messages = {
     showHookViz: "Show hook visualization (rails, firing beams) in the Town",
     showDelegationLines: "Show subagent delegation lines in the Town",
     showToolNames: "Show tool names in the log",
+    showTrayIcon: "Show the menu-bar icon",
     characterEditor: "Character editor",
     languageSection: "Language",
     languageLabel: "Display language",

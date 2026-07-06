@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { api } from "../ipc/commands";
 
 /**
  * Client-side display preferences for the town screen (persisted in localStorage).
@@ -28,6 +29,17 @@ export function parseHookViewPref(raw: string | null): boolean {
   }
 }
 
+/** Pure function reading trayEnabled from the persisted JSON (missing key defaults to true; only an explicit false is false). */
+export function parseTrayEnabledPref(raw: string | null): boolean {
+  if (!raw) return true;
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    return obj?.trayEnabled !== false;
+  } catch {
+    return true;
+  }
+}
+
 /** Pure function reading delegationView from the persisted JSON (missing key defaults to true; only an explicit false is false). */
 export function parseDelegationViewPref(raw: string | null): boolean {
   if (!raw) return true;
@@ -42,6 +54,7 @@ export function parseDelegationViewPref(raw: string | null): boolean {
 interface PersistedPrefs {
   lifecycleView: boolean;
   hookView: boolean;
+  trayEnabled: boolean;
   delegationView: boolean;
 }
 
@@ -51,10 +64,11 @@ function load(): PersistedPrefs {
     return {
       lifecycleView: parseLifecyclePref(raw),
       hookView: parseHookViewPref(raw),
+      trayEnabled: parseTrayEnabledPref(raw),
       delegationView: parseDelegationViewPref(raw),
     };
   } catch {
-    return { lifecycleView: true, hookView: true, delegationView: true };
+    return { lifecycleView: true, hookView: true, trayEnabled: true, delegationView: true };
   }
 }
 
@@ -65,6 +79,7 @@ function persist(state: PersistedPrefs): void {
       JSON.stringify({
         lifecycleView: state.lifecycleView,
         hookView: state.hookView,
+        trayEnabled: state.trayEnabled,
         delegationView: state.delegationView,
       })
     );
@@ -80,6 +95,12 @@ interface UiPrefsState {
   /** Whether to show the entire hook visualization (rail + firing badges + round-trip beams). */
   hookView: boolean;
   setHookView: (on: boolean) => void;
+  /** Whether the macOS menu-bar attention icon is shown. Setting this also
+   * applies the change to the real tray icon (via the set_tray_enabled
+   * command) — the one place that does so, so no call site can add a new
+   * way to flip this pref without also syncing the actual icon. */
+  trayEnabled: boolean;
+  setTrayEnabled: (on: boolean) => void;
   /** Whether the subagent delegation arcs are always shown in the town (hover still reveals them when off). */
   delegationView: boolean;
   setDelegationView: (on: boolean) => void;
@@ -94,6 +115,11 @@ export const useUiPrefsStore = create<UiPrefsState>((set, get) => ({
   setHookView(on) {
     set({ hookView: on });
     persist(get());
+  },
+  setTrayEnabled(on) {
+    set({ trayEnabled: on });
+    persist(get());
+    api.setTrayEnabled(on).catch((e) => console.error("Failed to toggle the tray icon:", e));
   },
   setDelegationView(on) {
     set({ delegationView: on });
