@@ -56,4 +56,13 @@ pub struct SubAgentRun {
     pub started_at: Option<String>,
     pub status: SessionStatus,
     pub current: ActivityState,
+    /// The id of the Agent tool_use block that spawned this run. Recorded when the
+    /// caller's transcript registers the call, and matched against the sidecar
+    /// meta's toolUseId when the subagent transcript appears.
+    pub tool_use_id: Option<String>,
+    /// agent_id of the subagent that spawned this run. None = spawned by the
+    /// main session (orchestrator).
+    pub parent_agent_id: Option<String>,
+    /// Spawn depth from the sidecar meta (1 = spawned by the main session).
+    pub spawn_depth: Option<u32>,
 }

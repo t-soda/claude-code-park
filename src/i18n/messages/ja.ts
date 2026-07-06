@@ -69,6 +69,7 @@ export const ja = {
     subtitle: "タウン画面の表示まわりと、キャラクターの見た目を設定します。",
     displaySection: "表示設定",
     showHookViz: "hook 可視化（レール・発火ビーム）をタウンに表示する",
+    showDelegationLines: "サブエージェント間の呼び出し線をタウンに表示する",
     showToolNames: "ログにツール名を表示する",
     characterEditor: "キャラクターエディタ",
     languageSection: "言語",
@@ -218,6 +219,10 @@ export const ja = {
 
   office: {
     unregistered: "登録なし",
+    orchestrator: "Orchestrator",
+    // {name} はキャラクター名。サブエージェント間の委任関係のホバー表示。
+    delegatedBy: "呼び出し元: {name}",
+    delegatesTo: "呼び出し先: {name}",
     quietTitle: "いまタウンは静かです 🌙",
     quietBody:
       "ターミナルで Claude Code を動かすと、ここに Orchestrator が現れて働き始めます。",

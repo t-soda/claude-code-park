@@ -13,4 +13,13 @@ agent_id: string, subagent_type: string | null, description: string | null,
 /**
  * The runtime model of the sub agent (assistant entry's message.model).
  */
-model: string | null, spawn_ms: number, stop_ms: number, };
+model: string | null, spawn_ms: number, stop_ms: number, 
+/**
+ * agent_id of the subagent that spawned this run. None = spawned by the
+ * main session (orchestrator).
+ */
+parent_agent_id: string | null, 
+/**
+ * Spawn depth from the sidecar meta (1 = spawned by the main session).
+ */
+spawn_depth: number | null, };

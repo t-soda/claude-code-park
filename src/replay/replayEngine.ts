@@ -100,6 +100,11 @@ export function createReplayCursor(data: ReplayData): ReplayCursor {
         // removes the sprite (the desired "employee leaves" behavior).
         status: tMs <= sub.stop_ms + LINGER_MS ? "Active" : "Ended",
         current: agentState.get(sub.agent_id) ?? IDLE,
+        // Delegation linkage for the arcs. tool_use_id is unused by the renderer
+        // (linking already happened in the backend), so it stays null here.
+        tool_use_id: null,
+        parent_agent_id: sub.parent_agent_id,
+        spawn_depth: sub.spawn_depth,
       });
     }
     const session: Session = {

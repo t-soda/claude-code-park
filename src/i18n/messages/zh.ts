@@ -65,6 +65,7 @@ export const zh: Messages = {
     subtitle: "设置小镇画面的显示相关项以及角色的外观。",
     displaySection: "显示设置",
     showHookViz: "在小镇中显示 hook 可视化（轨道・触发光束）",
+    showDelegationLines: "在小镇中显示子代理之间的委派连线",
     showToolNames: "在日志中显示工具名称",
     characterEditor: "角色编辑器",
     languageSection: "语言",
@@ -214,6 +215,9 @@ export const zh: Messages = {
 
   office: {
     unregistered: "未登记",
+    orchestrator: "Orchestrator",
+    delegatedBy: "调用者:{name}",
+    delegatesTo: "调用对象:{name}",
     quietTitle: "现在小镇很安静 🌙",
     quietBody:
       "在终端运行 Claude Code，这里就会出现 Orchestrator 开始工作。",

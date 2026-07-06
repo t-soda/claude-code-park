@@ -1,4 +1,5 @@
 pub mod entry;
+pub mod meta;
 pub mod parse;
 pub mod tail;
 
