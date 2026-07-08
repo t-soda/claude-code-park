@@ -266,6 +266,7 @@ export const ko: Messages = {
 
   hookBeam: {
     noResponse: "응답 없음",
+    blocked: "훅이 차단함",
   },
 
   todoChip: {

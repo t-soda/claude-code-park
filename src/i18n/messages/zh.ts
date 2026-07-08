@@ -266,6 +266,7 @@ export const zh: Messages = {
 
   hookBeam: {
     noResponse: "无响应",
+    blocked: "被钩子拦截",
   },
 
   todoChip: {

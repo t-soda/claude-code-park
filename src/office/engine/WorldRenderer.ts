@@ -23,7 +23,7 @@ import { OrchestratorSprite } from "./OrchestratorSprite";
 import { makeWander, stepWander, type WanderState, type CellRect } from "./Wanderer";
 import { t as tr } from "../../i18n";
 import { HookRail } from "./HookRail";
-import { HookBeam, pairKey } from "./HookBeam";
+import { badgeLabel, GrapplingHook, pairKey } from "./GrapplingHook";
 import { DelegationArcs, type ArcLink } from "./DelegationArc";
 import { groupBySlot, eventToSlotIndex, matchingHooks, type SlotGroup } from "../hookLifecycle";
 import type { EffectiveHooks } from "../../ipc/commands";
@@ -128,8 +128,8 @@ export class WorldRenderer {
   private callouts = new Map<string, Callout>();
   /** Screen-space Graphics for dialog tethers (owned by Stage; injected by OfficeView). */
   private dialogTetherG: Graphics | null = null;
-  /** Hook firing beam (frontmost). */
-  private beam = new HookBeam();
+  /** Grappling hooks thrown at the rail (frontmost). */
+  private hook = new GrapplingHook();
   /** Whether to show hook visualization (rail + badge + beam). OfficeView reflects uiPrefs. */
   private hookView = true;
   /** Arcs between delegating subagents (behind callouts/beams). */
@@ -157,7 +157,7 @@ export class WorldRenderer {
     this.contentLayer.sortableChildren = true;
     this.calloutLayer.addChild(this.delegationArcs);
     this.calloutLayer.addChild(this.tetherG);
-    this.calloutLayer.addChild(this.beam);
+    this.calloutLayer.addChild(this.hook);
     this.scene.addChild(this.floor, this.contentLayer, this.signLayer, this.calloutLayer);
     // Open-ground floor (backmost). Tile it if ground.png exists. Size is adjusted in relayoutFloor.
     const groundTex = this.groundTexture();
@@ -638,11 +638,11 @@ export class WorldRenderer {
     }
   }
 
-  /** Set whether hook visualization is shown. When off, hide the rails and beams. */
+  /** Set whether hook visualization is shown. When off, hide the rails and hooks. */
   setHookView(on: boolean) {
     this.hookView = on;
     for (const st of this.views.values()) st.rail.visible = on;
-    this.beam.visible = on;
+    this.hook.visible = on;
   }
 
   /** Set whether delegation arcs are always shown (hover-only when off). */
@@ -744,7 +744,10 @@ export class WorldRenderer {
     }
   }
 
-  /** Handle a firing event. Pre launches a pending beam, Post resolves a pending one, others fire a round-trip beam. */
+  /** Handle a firing event by throwing/resolving grappling hooks.
+   * Reconstructed firings gate on registered hooks (a throw at an empty socket
+   * teaches nothing); recorded executions (flash.outcome set) skip the gate —
+   * the transcript proves a hook ran even when the config can't be read. */
   private fireRail(
     st: RoomView,
     flash: HookFlash | undefined,
@@ -756,12 +759,57 @@ export class WorldRenderer {
     if (!flash) return;
     const slot = eventToSlotIndex(flash.event);
     if (slot < 0) return;
+    const from = { x: charX, y: charY };
+    const socketPos = () => {
+      const local = st.rail.socketLocalPos(slot);
+      return { x: st.rail.x + local.x, y: st.rail.y + local.y };
+    };
+    const key = pairKey(flash.correlationId, agentKey, flash.tool);
+    // Recorded Stop/SubagentStop runs latch one hook per actor.
+    const runKey = `run:${agentKey}`;
 
-    // PostToolUse: just complete the matching pending (no separate beam).
-    // Only when resolved, briefly light the socket to signal "completion received" (orphan Posts are ignored).
+    const isStop = flash.event === "Stop" || flash.event === "SubagentStop";
+    if (flash.outcome === "Blocked") {
+      st.rail.trigger(slot, "blocked", nowSec);
+      const reason = flash.blockReason ?? flash.hookCommand;
+      // Prefer turning an already-latched hook red; throw a fresh one only
+      // when nothing is latched on the affected lifecycle.
+      if (flash.event === "PreToolUse" && this.hook.blockPending(key, reason, nowSec)) return;
+      if (flash.event === "PostToolUse") {
+        // The tool ran (its pending hook releases as an error); the Post hook's
+        // complaint latches red on its own socket.
+        this.hook.resolvePending(key, true, nowSec);
+      }
+      if (isStop && this.hook.blockRun(runKey, reason, nowSec)) return;
+      this.hook.throwBlocked(from, socketPos(), nowSec, reason);
+      return;
+    }
+    if (flash.outcome === "Cancelled") {
+      st.rail.trigger(slot, "blocked", nowSec);
+      if (isStop && this.hook.snapRun(runKey, nowSec)) return;
+      this.hook.throwSnap(from, socketPos(), nowSec);
+      return;
+    }
+    if (flash.phase === "run-start") {
+      // Replay: the recorded run is starting right now; latch until the
+      // matching outcome flash crosses (durationMs caps a scrubbed replay).
+      st.rail.trigger(slot, "fired", nowSec);
+      this.hook.latchRun(runKey, from, socketPos(), nowSec, flash.durationMs);
+      return;
+    }
+    if (flash.outcome === "Completed") {
+      st.rail.trigger(slot, "fired", nowSec);
+      // Replay releases the latched run; live never saw the start, so reenact
+      // the whole run compressed (throw, hold scaled to durationMs, release).
+      if (this.hook.resolveRun(runKey, flash.isError, nowSec)) return;
+      this.hook.throwReenact(from, socketPos(), nowSec, flash.durationMs ?? 0, flash.isError);
+      return;
+    }
+
+    // PostToolUse: just release the matching pending hook (no separate throw).
+    // Only when resolved, briefly light the socket (orphan Posts are ignored).
     if (flash.event === "PostToolUse") {
-      const key = pairKey(flash.correlationId, agentKey, flash.tool);
-      if (this.beam.resolvePending(key, flash.isError, nowSec)) {
+      if (this.hook.resolvePending(key, flash.isError, nowSec)) {
         st.rail.trigger(slot, "fired", nowSec);
       }
       return;
@@ -771,14 +819,11 @@ export class WorldRenderer {
     const matched = group ? matchingHooks(group, flash.tool) : [];
     if (matched.length === 0) return; // do nothing if no hook is registered
     st.rail.trigger(slot, "fired", nowSec);
-    const local = st.rail.socketLocalPos(slot);
-    const socketPos = { x: st.rail.x + local.x, y: st.rail.y + local.y };
 
     if (flash.event === "PreToolUse") {
-      const key = pairKey(flash.correlationId, agentKey, flash.tool);
-      this.beam.startPending(key, { x: charX, y: charY }, socketPos, nowSec);
+      this.hook.startPending(key, from, socketPos(), nowSec);
     } else {
-      this.beam.roundTrip({ x: charX, y: charY }, socketPos, nowSec);
+      this.hook.throwRelease(from, socketPos(), nowSec);
     }
   }
 
@@ -800,10 +845,7 @@ export class WorldRenderer {
     if (!flash) return;
     if (this.lastFlash.get(key) === flash.firedAt) return;
     this.lastFlash.set(key, flash.firedAt);
-    const label = flash.tool
-      ? `🪝 ${flash.event} ${flash.tool}`
-      : `🪝 ${flash.event}`;
-    fire(label);
+    fire(badgeLabel(flash));
   }
 
   /** Per-frame animation driver (t in seconds). */
@@ -830,7 +872,7 @@ export class WorldRenderer {
     }
 
     for (const st of this.views.values()) st.rail.update(t);
-    this.beam.update(t);
+    this.hook.update(t);
     this.delegationArcs.update(this.collectArcLinks(), t);
     this.placeCallouts(dt);
     this.drawDialogTether();
