@@ -22,7 +22,20 @@ description: string | null,
  * The runtime model this sub agent actually ran on (the assistant entry's
  * message.model). The pixel art is chosen from this, not the static model in the definition file.
  */
-model: string | null, started_at: string | null, status: SessionStatus, current: ActivityState, 
+model: string | null, started_at: string | null, 
+/**
+ * Timestamp of the newest transcript entry seen for this run. The basis for
+ * time-decay status (more accurate than current.since, which only moves when
+ * the work kind changes).
+ */
+last_event_at: string | null, 
+/**
+ * Set when the parent recorded this run's completion (the spawning tool_use's
+ * tool_result, or a background agent's task-notification). While set, the run
+ * is pinned to Ended; cleared if the transcript shows genuinely later activity
+ * (a resumed background agent).
+ */
+completed_at: string | null, status: SessionStatus, current: ActivityState, 
 /**
  * The id of the Agent tool_use block that spawned this run. Recorded when the
  * caller's transcript registers the call, and matched against the sidecar

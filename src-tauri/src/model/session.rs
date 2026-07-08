@@ -54,6 +54,15 @@ pub struct SubAgentRun {
     /// message.model). The pixel art is chosen from this, not the static model in the definition file.
     pub model: Option<String>,
     pub started_at: Option<String>,
+    /// Timestamp of the newest transcript entry seen for this run. The basis for
+    /// time-decay status (more accurate than current.since, which only moves when
+    /// the work kind changes).
+    pub last_event_at: Option<String>,
+    /// Set when the parent recorded this run's completion (the spawning tool_use's
+    /// tool_result, or a background agent's task-notification). While set, the run
+    /// is pinned to Ended; cleared if the transcript shows genuinely later activity
+    /// (a resumed background agent).
+    pub completed_at: Option<String>,
     pub status: SessionStatus,
     pub current: ActivityState,
     /// The id of the Agent tool_use block that spawned this run. Recorded when the
