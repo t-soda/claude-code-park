@@ -1,5 +1,6 @@
 use super::activity::WorkKind;
 use super::session::SessionStatus;
+use crate::hook_events::HookOutcome;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -53,9 +54,10 @@ pub struct ReplaySubagent {
 /// the same timestamp: Activity (drives the sprite pose/callout) and PreToolUse
 /// (drives the hook flash/beam), mirroring how the live pipeline splits
 /// Session.current vs HookEvent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub enum ReplayEventKind {
+    #[default]
     SessionStart,
     UserPrompt,
     Activity,
@@ -64,11 +66,16 @@ pub enum ReplayEventKind {
     TurnEnd,
     SubagentSpawn,
     SubagentStop,
+    /// Synthesized start of a recorded Stop/SubagentStop hook run: placed at
+    /// (summary timestamp - durationMs), so the playhead crosses it while the
+    /// hooks were actually running. The matching TurnEnd (or the cancelled
+    /// event) carries the outcome that releases it.
+    HookRunStart,
 }
 
 /// One event in the replay stream (flat struct with Option payloads, HookEvent style).
 /// at_ms is relative to ReplaySessionMeta.started_at_ms.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../src/bindings/")]
 pub struct ReplayEvent {
     pub at_ms: f64,
@@ -89,6 +96,14 @@ pub struct ReplayEvent {
     pub is_error: Option<bool>,
     /// UserPrompt: prompt excerpt. SubagentSpawn: the spawn description.
     pub text: Option<String>,
+    /// How the recorded hook execution ended (None for reconstructed firings).
+    pub outcome: Option<HookOutcome>,
+    /// Wall time of the recorded hook run (TurnEnd summary / HookRunStart / cancelled).
+    pub duration_ms: Option<f64>,
+    /// The hook command behind the record.
+    pub hook_command: Option<String>,
+    /// Why the hook blocked.
+    pub block_reason: Option<String>,
 }
 
 /// Everything the frontend needs to replay one session.
