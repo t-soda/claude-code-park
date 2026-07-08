@@ -17,8 +17,10 @@ pub struct RawEntry {
     /// The subtype of a system entry (turn_duration, etc.).
     pub subtype: Option<String>,
     /// Top-level content of non-message entries. queue-operation entries carry the
-    /// task-notification text (background agent stopped) here.
-    pub content: Option<String>,
+    /// task-notification text (background agent stopped) here. Kept raw so a future
+    /// CLI writing a non-string shape degrades to "no notification" instead of
+    /// failing the whole line's parse (which would also drop its timestamp/meta).
+    pub content: Option<serde_json::Value>,
     pub message: Option<RawMessage>,
 }
 
@@ -160,7 +162,7 @@ impl RawEntry {
         if self.entry_type.as_deref() != Some("queue-operation") {
             return None;
         }
-        let content = self.content.as_deref()?;
+        let content = self.content.as_ref()?.as_str()?;
         if !content.contains("<task-notification>") {
             return None;
         }
@@ -222,6 +224,18 @@ mod tests {
         assert_eq!(user.task_notification(), None);
     }
 
+    /// A non-string top-level content (should a future CLI write one) must not
+    /// fail the line's parse — the entry still yields its timestamp and simply
+    /// carries no notification.
+    #[test]
+    fn non_string_content_degrades_to_no_notification() {
+        let entry = e(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-07-05T11:51:26.492Z","sessionId":"S","content":{"kind":"structured","text":"<task-notification>x</task-notification>"}}"#,
+        );
+        assert_eq!(entry.task_notification(), None);
+        assert_eq!(entry.timestamp.as_deref(), Some("2026-07-05T11:51:26.492Z"));
+    }
+
     /// result_text reads string content directly and digs the first text block
     /// out of array content.
     #[test]
@@ -237,5 +251,19 @@ mod tests {
             arr.tool_results().next().unwrap().result_text(),
             Some("Async agent launched successfully.")
         );
+    }
+
+    /// Content shapes with no leading text yield None: an array without text
+    /// blocks, and a numeric content.
+    #[test]
+    fn result_text_none_without_text() {
+        let no_text = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","source":{}}]}]}}"#,
+        );
+        assert_eq!(no_text.tool_results().next().unwrap().result_text(), None);
+        let numeric = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":42}]}}"#,
+        );
+        assert_eq!(numeric.tool_results().next().unwrap().result_text(), None);
     }
 }

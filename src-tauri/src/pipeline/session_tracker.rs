@@ -918,6 +918,29 @@ mod tests {
         assert!(r.completed_at.is_none(), "the completion pin is lifted");
     }
 
+    /// A task-notification still ends the run when the task-id doesn't match any
+    /// agent_id (e.g. the transcript was never read, so the run only knows its
+    /// spawning tool_use id) — the tool-use-id side of the match is the safety net.
+    #[test]
+    fn task_notification_matches_by_tool_use_id() {
+        let mut w = World::default();
+        let delegate = e(
+            r#"{"type":"assistant","timestamp":"2026-06-21T16:20:00.000Z","sessionId":"S","cwd":"/proj","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore","description":"dig"}}]}}"#,
+        );
+        apply_main(&mut w, "S", &[delegate], &mut Vec::new());
+        assert!(w.sessions.get("S").unwrap().subagents[0].agent_id.is_empty());
+
+        let notify = e(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-06-21T16:21:00.000Z","sessionId":"S","content":"<task-notification>\n<task-id>never-read</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n</task-notification>"}"#,
+        );
+        apply_main(&mut w, "S", &[notify], &mut Vec::new());
+        assert_eq!(
+            w.sessions.get("S").unwrap().subagents[0].status,
+            SessionStatus::Ended,
+            "matched via tool-use-id despite the unknown task-id"
+        );
+    }
+
     /// A killed CLI records no tool_results: once the parent decays to Ended,
     /// every run under it ends too instead of haunting the park.
     #[test]
