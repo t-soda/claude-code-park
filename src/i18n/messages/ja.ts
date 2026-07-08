@@ -274,6 +274,7 @@ export const ja = {
 
   hookBeam: {
     noResponse: "応答なし",
+    blocked: "フックがブロック",
   },
 
   todoChip: {

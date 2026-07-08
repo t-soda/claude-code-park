@@ -5,7 +5,7 @@ import type {
   Session,
   SubAgentRun,
 } from "../bindings";
-import type { HookFlash } from "../stores/hookStore";
+import { mergeFlash, type HookFlash } from "../stores/hookStore";
 
 /**
  * How long (virtual ms) a stopped sub agent keeps its sprite after SubagentStop,
@@ -182,11 +182,21 @@ const FLASH_EVENT: Partial<Record<ReplayEvent["kind"], string>> = {
   SubagentStop: "SubagentStop",
 };
 
+/** The lifecycle a replay event fires as. HookRunStart marks a recorded
+ * Stop/SubagentStop hook run, so it names the stop lifecycle of its actor. */
+export function flashEventFor(ev: ReplayEvent): string | null {
+  if (ev.kind === "HookRunStart") {
+    return ev.agent_id !== null ? "SubagentStop" : "Stop";
+  }
+  return FLASH_EVENT[ev.kind] ?? null;
+}
+
 /**
  * Synthesizes hook flashes for the events crossed in one tick, in the exact shape
  * hookStore feeds the renderer: keyed by agent_id ?? session_id, one flash per actor
- * (later events win within a tick, like the live Record). firedAt values are made
- * unique per emission because the renderer dedupes by firedAt equality.
+ * (later events win within a tick, like the live Record — except a bare duplicate
+ * never displaces a rich one, see mergeFlash). firedAt values are made unique per
+ * emission because the renderer dedupes by firedAt equality.
  */
 export function flashesFor(
   crossed: ReplayEvent[],
@@ -196,15 +206,21 @@ export function flashesFor(
   const out: Record<string, HookFlash> = {};
   let i = 0;
   for (const ev of crossed) {
-    const event = FLASH_EVENT[ev.kind];
+    const event = flashEventFor(ev);
     if (!event) continue;
-    out[ev.agent_id ?? sessionId] = {
+    const key = ev.agent_id ?? sessionId;
+    out[key] = mergeFlash(out[key], {
       event,
       tool: ev.tool_name,
       firedAt: nowRealMs + i * 0.001,
       correlationId: ev.correlation_id,
       isError: ev.is_error,
-    };
+      outcome: ev.outcome,
+      durationMs: ev.duration_ms,
+      hookCommand: ev.hook_command,
+      blockReason: ev.block_reason,
+      phase: ev.kind === "HookRunStart" ? "run-start" : "fire",
+    });
     i++;
   }
   return out;

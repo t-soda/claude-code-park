@@ -274,6 +274,7 @@ export const es: Messages = {
 
   hookBeam: {
     noResponse: "Sin respuesta",
+    blocked: "Bloqueado por el hook",
   },
 
   todoChip: {

@@ -12,6 +12,17 @@ const DEVICE_COLOR = 0xc084fc;
 const EMPTY_COLOR = 0x4a525f;
 const FIRED_COLOR = 0xffe08a;
 const PASSED_COLOR = 0x9aa4b2;
+const BLOCKED_COLOR = 0xff5a5a;
+
+/** Pulse variant: fired = matched a registration, passed = passed through,
+ * blocked = a hook on this socket blocked its lifecycle. */
+export type PulseVariant = "fired" | "passed" | "blocked";
+
+const PULSE_COLOR: Record<PulseVariant, number> = {
+  fired: FIRED_COLOR,
+  passed: PASSED_COLOR,
+  blocked: BLOCKED_COLOR,
+};
 
 /** Internal state of one socket (for pulse management). */
 interface Socket {
@@ -19,7 +30,7 @@ interface Socket {
   base: Graphics; // fallback drawing or texture base
   glow: Graphics;
   triggeredAt: number;
-  variant: "fired" | "passed";
+  variant: PulseVariant;
 }
 
 /**
@@ -87,8 +98,8 @@ export class HookRail extends Container {
     }
   }
 
-  /** Trigger a slot (fired = matched a registration / passed = passed through). */
-  trigger(slotIndex: number, variant: "fired" | "passed", nowSec: number) {
+  /** Trigger a slot's pulse (see PulseVariant). */
+  trigger(slotIndex: number, variant: PulseVariant, nowSec: number) {
     const s = this.sockets[slotIndex];
     if (!s) return;
     s.triggeredAt = nowSec;
@@ -123,10 +134,11 @@ export class HookRail extends Container {
         continue;
       }
       const p = age / PULSE_TTL; // 0->1
-      const color = s.variant === "fired" ? FIRED_COLOR : PASSED_COLOR;
+      const color = PULSE_COLOR[s.variant];
+      const strong = s.variant !== "passed";
       const r = 10 + p * 10;
-      s.glow.circle(0, 0, r).fill({ color, alpha: (1 - p) * (s.variant === "fired" ? 0.5 : 0.25) });
-      s.node.scale.set(1 + Math.max(0, 0.3 - p) * (s.variant === "fired" ? 1.2 : 0.5));
+      s.glow.circle(0, 0, r).fill({ color, alpha: (1 - p) * (strong ? 0.5 : 0.25) });
+      s.node.scale.set(1 + Math.max(0, 0.3 - p) * (strong ? 1.2 : 0.5));
     }
   }
 }
