@@ -105,9 +105,7 @@ impl ReplayBuilder {
                 tool_name: row.tool_name.clone(),
                 detail: row.detail,
                 active_skill: self.active_skill.clone(),
-                correlation_id: None,
-                is_error: None,
-                text: None,
+                ..Default::default()
             });
             // row_for returns Some(tool) rows for tool_use, None-tool rows for
             // prompt/turn_end/thinking, and None for TodoWrite/text/tool_result —
@@ -136,17 +134,34 @@ impl ReplayBuilder {
                 }
                 _ => return,
             };
+            // A recorded run with a duration gets a synthesized start marker at
+            // (completion - duration), so playback latches the hook while the run
+            // was genuinely in flight. assemble() sorts events, so pushing the
+            // earlier timestamp afterwards is fine. Clamped to the file's first
+            // entry to keep at_ms non-negative after rebasing.
+            if let Some(d) = ev.duration_ms {
+                self.out.events.push(ReplayEvent {
+                    at_ms: (at_ms - d).max(self.out.first_ts_ms.unwrap_or(at_ms)),
+                    kind: ReplayEventKind::HookRunStart,
+                    agent_id: self.agent_id.clone(),
+                    duration_ms: Some(d),
+                    hook_command: ev.hook_command.clone(),
+                    ..Default::default()
+                });
+            }
             self.out.events.push(ReplayEvent {
                 at_ms,
                 kind,
                 agent_id: self.agent_id.clone(),
-                work: None,
                 tool_name: ev.tool_name,
-                detail: None,
-                active_skill: None,
                 correlation_id: ev.correlation_id,
                 is_error: ev.is_error,
                 text,
+                outcome: ev.outcome,
+                duration_ms: ev.duration_ms,
+                hook_command: ev.hook_command,
+                block_reason: ev.block_reason,
+                ..Default::default()
             });
         }
     }
@@ -180,13 +195,9 @@ impl ReplayBuilder {
                 at_ms,
                 kind: ReplayEventKind::SubagentSpawn,
                 agent_id: self.agent_id.clone(),
-                work: None,
-                tool_name: None,
                 detail: subagent_type,
-                active_skill: None,
-                correlation_id: None,
-                is_error: None,
                 text: description.map(|d| excerpt(&d, EXCERPT_CHARS)),
+                ..Default::default()
             });
         }
     }
@@ -241,14 +252,7 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<SubFile>) -> Option
     events.push(ReplayEvent {
         at_ms: started_at_ms,
         kind: ReplayEventKind::SessionStart,
-        agent_id: None,
-        work: None,
-        tool_name: None,
-        detail: None,
-        active_skill: None,
-        correlation_id: None,
-        is_error: None,
-        text: None,
+        ..Default::default()
     });
     events.extend(main.events);
 
@@ -327,13 +331,7 @@ pub fn assemble(session_id: &str, main: BuiltFile, subs: Vec<SubFile>) -> Option
                 at_ms: stop_ms,
                 kind: ReplayEventKind::SubagentStop,
                 agent_id: Some(agent_id.clone()),
-                work: None,
-                tool_name: None,
-                detail: None,
-                active_skill: None,
-                correlation_id: None,
-                is_error: None,
-                text: None,
+                ..Default::default()
             });
         }
         events.extend(built.events);
@@ -724,6 +722,81 @@ mod tests {
             .filter(|ev| ev.kind == ReplayEventKind::SubagentStop)
             .count();
         assert_eq!(stops, 1);
+    }
+
+    /// A stop_hook_summary yields a HookRunStart marker durationMs before the
+    /// TurnEnd, so playback latches the hook exactly while the run was in flight.
+    #[test]
+    fn synthesizes_hook_run_start_before_summary() {
+        use crate::hook_events::HookOutcome;
+        let main = build_main(&[
+            &format!(r#"{{"type":"user","timestamp":"{T0}","message":{{"role":"user","content":"go"}}}}"#),
+            &format!(r#"{{"type":"system","subtype":"stop_hook_summary","hookInfos":[{{"command":"afplay Funk.aiff","durationMs":2900}}],"hookErrors":[],"preventedContinuation":false,"stopReason":"","timestamp":"{T1}"}}"#),
+        ]);
+        let data = assemble("SID", main, vec![]).expect("assembles");
+
+        let start = data
+            .events
+            .iter()
+            .find(|ev| ev.kind == ReplayEventKind::HookRunStart)
+            .expect("start marker synthesized");
+        let end = data
+            .events
+            .iter()
+            .find(|ev| ev.kind == ReplayEventKind::TurnEnd)
+            .expect("turn end kept");
+        assert_eq!(end.at_ms, 5000.0);
+        assert_eq!(start.at_ms, 5000.0 - 2900.0);
+        assert_eq!(start.duration_ms, Some(2900.0));
+        assert_eq!(start.hook_command.as_deref(), Some("afplay Funk.aiff"));
+        assert_eq!(end.outcome, Some(HookOutcome::Completed));
+        assert_eq!(end.duration_ms, Some(2900.0));
+        // Events stay sorted, so the start marker is crossed before the end.
+        let si = data.events.iter().position(|ev| ev.kind == ReplayEventKind::HookRunStart);
+        let ei = data.events.iter().position(|ev| ev.kind == ReplayEventKind::TurnEnd);
+        assert!(si < ei);
+    }
+
+    /// A run longer than the transcript so far clamps its start marker to the
+    /// file's first entry (at_ms must not go negative after rebasing).
+    #[test]
+    fn hook_run_start_clamps_to_session_start() {
+        let main = build_main(&[
+            &format!(r#"{{"type":"user","timestamp":"{T0}","message":{{"role":"user","content":"go"}}}}"#),
+            &format!(r#"{{"type":"system","subtype":"stop_hook_summary","hookInfos":[{{"command":"slow.sh","durationMs":99999}}],"timestamp":"{T1}"}}"#),
+        ]);
+        let data = assemble("SID", main, vec![]).expect("assembles");
+        let start = data
+            .events
+            .iter()
+            .find(|ev| ev.kind == ReplayEventKind::HookRunStart)
+            .expect("start marker synthesized");
+        assert_eq!(start.at_ms, 0.0);
+    }
+
+    /// A blocked PreToolUse (hook rejection in the tool_result) flows its outcome
+    /// and reason into the replay stream.
+    #[test]
+    fn pre_hook_block_flows_into_replay() {
+        use crate::hook_events::HookOutcome;
+        let main = build_main(&[
+            &format!(r#"{{"type":"assistant","timestamp":"{T0}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c1","name":"Read","input":{{"file_path":"/x.txt"}}}}]}}}}"#),
+            &format!(r#"{{"type":"user","timestamp":"{T1}","message":{{"role":"user","content":[{{"type":"tool_result","content":"PreToolUse:Read hook error: [deny.sh]: nope","is_error":true,"tool_use_id":"c1"}}]}}}}"#),
+        ]);
+        let data = assemble("SID", main, vec![]).expect("assembles");
+        let blocked = data
+            .events
+            .iter()
+            .find(|ev| ev.kind == ReplayEventKind::PreToolUse && ev.outcome.is_some())
+            .expect("blocked Pre in stream");
+        assert_eq!(blocked.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("c1"));
+        assert_eq!(blocked.hook_command.as_deref(), Some("deny.sh"));
+        assert_eq!(blocked.block_reason.as_deref(), Some("nope"));
+        assert!(
+            !data.events.iter().any(|ev| ev.kind == ReplayEventKind::PostToolUse),
+            "a rejected tool has no Post"
+        );
     }
 
     /// Excerpts cut on char boundaries (multi-byte safe) and add an ellipsis.

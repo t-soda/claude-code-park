@@ -6,4 +6,4 @@
  * (drives the hook flash/beam), mirroring how the live pipeline splits
  * Session.current vs HookEvent.
  */
-export type ReplayEventKind = "SessionStart" | "UserPrompt" | "Activity" | "PreToolUse" | "PostToolUse" | "TurnEnd" | "SubagentSpawn" | "SubagentStop";
+export type ReplayEventKind = "SessionStart" | "UserPrompt" | "Activity" | "PreToolUse" | "PostToolUse" | "TurnEnd" | "SubagentSpawn" | "SubagentStop" | "HookRunStart";
