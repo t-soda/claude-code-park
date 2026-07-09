@@ -7,19 +7,28 @@ export interface Pt {
   y: number;
 }
 
+/** Live anchor: the current world position of a rope end, or null when the
+ * target is gone (the throw then keeps its last known position). Anchors are
+ * re-read every frame so ropes follow moving characters and a rail that
+ * re-centers when the room resizes. */
+export type Anchor = () => Pt | null;
+
 /** Outbound flight time of a thrown hook (sec). */
 export const FLY = 0.35;
-/** Time for a released hook to fly back (sec). */
-export const RETURN = 0.3;
+/** Time to reel a released hook back in (sec). */
+export const REEL = 0.4;
 /** How long a plain round-trip event keeps the hook latched (sec). */
 export const HOLD_ROUND = 0.35;
-/** Dwell cap for a pending (PreToolUse) hook before it gives up (sec). */
+/** Dwell cap for a pending (PreToolUse) hook before it reels back in (sec). */
 export const PENDING_TIMEOUT = 10;
-export const PENDING_TIMEOUT_FADE = 1;
+/** How long the "no response" label lingers at the socket after the reel-in (sec). */
+export const TIMEOUT_LABEL_TTL = 1.2;
 /** How long a blocked hook stays latched in red (sec). */
 export const BLOCKED_TTL = 4;
 /** Fade time of a snapped (cancelled) rope (sec). */
 export const SNAP_TTL = 0.7;
+/** Seconds for a taut rope to pull straight after latching/blocking. */
+export const TAUT_RAMP = 0.5;
 /** Safety margin past a run's real duration before a latched run self-releases
  * (a paused/scrubbed replay never crosses the resolving event). */
 export const RUN_HOLD_SLACK = 5;
@@ -28,7 +37,8 @@ const ROPE_COLOR = 0xc084fc;
 const SUCCESS_COLOR = 0xffe08a;
 const ERROR_COLOR = 0xff5a5a;
 const BLOCKED_COLOR = 0xff5a5a;
-const TIMEOUT_COLOR = 0xff6b3d;
+/** Neutral reel-in (timeout): deliberately not an error color. */
+const NEUTRAL_COLOR = 0x9aa4b2;
 const SNAP_COLOR = 0xff6b3d;
 /** Max characters of a block reason shown beside the socket. */
 const REASON_CHARS = 28;
@@ -58,21 +68,29 @@ export function reenactHold(durationMs: number): number {
   return Math.min(2.5, Math.max(0.6, (durationMs / 1000) * 0.3));
 }
 
+/** How taut the rope is (0 slack -> 1 straight) since it started pulling. */
+export function tautness(tautSince: number | null, nowSec: number): number {
+  if (tautSince == null) return 0;
+  return Math.min(1, Math.max(0, (nowSec - tautSince) / TAUT_RAMP));
+}
+
 export type ThrowState =
   | "flying"
   | "latched"
   | "blocked"
-  | "returning"
+  | "reeling"
   | "snapped"
-  | "timeout"
   | "done";
+
+/** Why a hook is being reeled back in (drives the reel color). */
+export type ReelCause = "resolved" | "auto" | "timeout";
 
 /** The timing facts of one throw. All times are seconds on the render clock. */
 export interface ThrowTiming {
   startSec: number;
-  /** Auto-release time (round trips, reenactments, run safety cap). null = stay latched. */
+  /** Auto-reel time (round trips, reenactments, run safety cap). null = stay latched. */
   holdUntil: number | null;
-  /** Release began (success path). */
+  /** Reel-in began (explicit resolution). */
   resolvedSec: number | null;
   /** Turned red and stays latched (hook blocked its lifecycle). */
   blockedSec: number | null;
@@ -82,13 +100,15 @@ export interface ThrowTiming {
   timeoutAt: number | null;
 }
 
-/** When the release animation started (explicit resolve or auto-release). */
-export function releaseSec(tm: ThrowTiming): number | null {
-  if (tm.resolvedSec != null) return tm.resolvedSec;
-  return tm.holdUntil;
+/** When the reel-in started, and why. null while still latched/flying. */
+export function reelStart(tm: ThrowTiming, nowSec: number): { at: number; cause: ReelCause } | null {
+  if (tm.resolvedSec != null) return { at: tm.resolvedSec, cause: "resolved" };
+  if (tm.holdUntil != null && nowSec > tm.holdUntil) return { at: tm.holdUntil, cause: "auto" };
+  if (tm.timeoutAt != null && nowSec > tm.timeoutAt) return { at: tm.timeoutAt, cause: "timeout" };
+  return null;
 }
 
-/** Current state of a throw. Terminal marks (snap/block/resolve) win over the
+/** Current state of a throw. Terminal marks (snap/block) win over the
  * flight/dwell timeline; each fades out on its own TTL. */
 export function throwState(tm: ThrowTiming, nowSec: number): ThrowState {
   if (tm.snappedSec != null) {
@@ -97,16 +117,12 @@ export function throwState(tm: ThrowTiming, nowSec: number): ThrowState {
   if (tm.blockedSec != null) {
     return nowSec - tm.blockedSec <= BLOCKED_TTL ? "blocked" : "done";
   }
-  if (tm.resolvedSec != null) {
-    return nowSec - tm.resolvedSec <= RETURN ? "returning" : "done";
+  const reel = reelStart(tm, nowSec);
+  if (reel) {
+    const ttl = reel.cause === "timeout" ? REEL + TIMEOUT_LABEL_TTL : REEL;
+    return nowSec - reel.at <= ttl ? "reeling" : "done";
   }
   if (nowSec - tm.startSec <= FLY) return "flying";
-  if (tm.holdUntil != null && nowSec > tm.holdUntil) {
-    return nowSec - tm.holdUntil <= RETURN ? "returning" : "done";
-  }
-  if (tm.timeoutAt != null && nowSec > tm.timeoutAt) {
-    return nowSec - tm.timeoutAt <= PENDING_TIMEOUT_FADE ? "timeout" : "done";
-  }
   return "latched";
 }
 
@@ -151,19 +167,33 @@ export function badgeLabel(flash: HookFlash): string {
 }
 
 interface Throw extends ThrowTiming {
-  a: Pt;
-  b: Pt;
+  /** Rope origin: the rail socket the hook launched from. */
+  from: Pt;
+  /** Rope target: the character the hook grips. */
+  to: Pt;
+  fromAnchor: Anchor;
+  toAnchor: Anchor;
   arc: number;
+  /** When the rope started pulling straight (run latches, blocks). null = stays slack. */
+  tautSince: number | null;
   isError: boolean | null;
   labelText: string | null;
   labelColor: number;
   label: Text | null;
 }
 
-function makeThrow(a: Pt, b: Pt, nowSec: number): Throw {
+function resolveAnchor(anchor: Anchor): Pt {
+  return anchor() ?? { x: 0, y: 0 };
+}
+
+function makeThrow(from: Anchor, to: Anchor, nowSec: number): Throw {
+  const a = resolveAnchor(from);
+  const b = resolveAnchor(to);
   return {
-    a: { ...a },
-    b: { ...b },
+    from: a,
+    to: b,
+    fromAnchor: from,
+    toAnchor: to,
     arc: arcHeight(a, b),
     startSec: nowSec,
     holdUntil: null,
@@ -171,14 +201,15 @@ function makeThrow(a: Pt, b: Pt, nowSec: number): Throw {
     blockedSec: null,
     snappedSec: null,
     timeoutAt: null,
+    tautSince: null,
     isError: null,
     labelText: null,
-    labelColor: TIMEOUT_COLOR,
+    labelColor: NEUTRAL_COLOR,
     label: null,
   };
 }
 
-/** Never release/block/snap before the hook visually arrives at the socket. */
+/** Never release/block/snap before the hook visually reaches the character. */
 function afterArrival(tm: ThrowTiming, nowSec: number): number {
   return Math.max(nowSec, tm.startSec + FLY);
 }
@@ -188,10 +219,12 @@ function durationLabel(durationMs: number): string {
 }
 
 /**
- * Grappling hooks thrown from characters onto the lifecycle rail's sockets.
- * A throw flies a parabola, latches onto the socket while its hook is running
- * (or its tool is in flight), then releases, blocks red, or snaps depending on
- * how the recorded execution ended. A single Graphics in scene(world) space.
+ * Grappling hooks launched from the lifecycle rail's sockets onto characters:
+ * the registered hook is the thrower, and the agent is what it catches. A
+ * throw flies a parabola, grips the character while something is genuinely
+ * happening — slack rope while the tool merely runs, pulled taut while a hook
+ * holds the agent — then reels back in, blocks red, or snaps depending on how
+ * the recorded execution ended. A single Graphics in scene(world) space.
  */
 export class GrapplingHook extends Container {
   private g = new Graphics();
@@ -207,18 +240,20 @@ export class GrapplingHook extends Container {
     this.addChild(this.g);
   }
 
-  /** Throw, latch briefly, release. For firings with no completion record. */
-  throwRelease(a: Pt, b: Pt, nowSec: number) {
-    const t = makeThrow(a, b, nowSec);
+  /** Throw, grip briefly, reel back in. For firings with no completion record. */
+  throwRelease(from: Anchor, to: Anchor, nowSec: number) {
+    const t = makeThrow(from, to, nowSec);
     t.holdUntil = nowSec + FLY + HOLD_ROUND;
     this.throws.push(t);
   }
 
-  /** Reenact an already-finished run: latch scaled to the real duration, with a
-   * duration label. Live mode only learns of a Stop-hook run when it completes. */
-  throwReenact(a: Pt, b: Pt, nowSec: number, durationMs: number, isError: boolean | null) {
-    const t = makeThrow(a, b, nowSec);
+  /** Reenact an already-finished run: grip taut scaled to the real duration,
+   * with a duration label. Live mode only learns of a Stop-hook run when it
+   * completes. */
+  throwReenact(from: Anchor, to: Anchor, nowSec: number, durationMs: number, isError: boolean | null) {
+    const t = makeThrow(from, to, nowSec);
     t.holdUntil = nowSec + FLY + reenactHold(durationMs);
+    t.tautSince = nowSec + FLY;
     t.isError = isError;
     if (durationMs > 0) {
       t.labelText = durationLabel(durationMs);
@@ -227,33 +262,34 @@ export class GrapplingHook extends Container {
     this.throws.push(t);
   }
 
-  /** Throw and latch red on arrival (a recorded block with no live throw to mark). */
-  throwBlocked(a: Pt, b: Pt, nowSec: number, reason: string | null) {
-    const t = makeThrow(a, b, nowSec);
+  /** Throw and grip red on arrival (a recorded block with no live throw to mark). */
+  throwBlocked(from: Anchor, to: Anchor, nowSec: number, reason: string | null) {
+    const t = makeThrow(from, to, nowSec);
     t.blockedSec = nowSec + FLY;
+    t.tautSince = nowSec + FLY;
     this.setBlockLabel(t, reason);
     this.throws.push(t);
   }
 
   /** Throw and snap the rope on arrival (a cancelled hook with no live latch). */
-  throwSnap(a: Pt, b: Pt, nowSec: number) {
-    const t = makeThrow(a, b, nowSec);
+  throwSnap(from: Anchor, to: Anchor, nowSec: number) {
+    const t = makeThrow(from, to, nowSec);
     t.snappedSec = nowSec + FLY + 0.15;
     this.throws.push(t);
   }
 
-  /** Register one pending throw (PreToolUse). The same key is pushed onto a FIFO
-   * queue. a (character position) is frozen at throw time; a pending hook may
-   * dwell up to PENDING_TIMEOUT seconds. */
-  startPending(key: string, a: Pt, b: Pt, nowSec: number) {
-    const t = makeThrow(a, b, nowSec);
+  /** Register one pending throw (PreToolUse): the hook grips the character
+   * with a slack rope while the tool runs. The same key is pushed onto a FIFO
+   * queue; a pending hook waits up to PENDING_TIMEOUT seconds for its Post. */
+  startPending(key: string, from: Anchor, to: Anchor, nowSec: number) {
+    const t = makeThrow(from, to, nowSec);
     t.timeoutAt = nowSec + PENDING_TIMEOUT;
     const q = this.pending.get(key);
     if (q) q.push(t);
     else this.pending.set(key, [t]);
   }
 
-  /** Release the matching pending throw (PostToolUse). Returns true if found. */
+  /** Reel in the matching pending throw (PostToolUse). Returns true if found. */
   resolvePending(key: string, isError: boolean | null, nowSec: number): boolean {
     const t = this.firstUnresolved(key);
     if (!t) return false;
@@ -262,20 +298,23 @@ export class GrapplingHook extends Container {
     return true;
   }
 
-  /** Turn the matching pending throw into a red latched block. Returns true if found. */
+  /** Pull the matching pending throw taut and red (the hook holds the agent). */
   blockPending(key: string, reason: string | null, nowSec: number): boolean {
     const t = this.firstUnresolved(key);
     if (!t) return false;
     t.blockedSec = afterArrival(t, nowSec);
+    t.tautSince = t.blockedSec;
     t.timeoutAt = null;
     this.setBlockLabel(t, reason);
     return true;
   }
 
-  /** Latch a recorded run (replay HookRunStart). durationMs caps the latch so a
-   * paused or scrubbed replay that never crosses the resolving event still lets go. */
-  latchRun(key: string, a: Pt, b: Pt, nowSec: number, durationMs: number | null) {
-    const t = makeThrow(a, b, nowSec);
+  /** Grip a recorded run (replay HookRunStart): the rope pulls taut — the agent
+   * is genuinely waiting on this hook. durationMs caps the latch so a paused or
+   * scrubbed replay that never crosses the resolving event still lets go. */
+  latchRun(key: string, from: Anchor, to: Anchor, nowSec: number, durationMs: number | null) {
+    const t = makeThrow(from, to, nowSec);
+    t.tautSince = nowSec + FLY;
     if (durationMs != null) {
       t.holdUntil = nowSec + FLY + durationMs / 1000 + RUN_HOLD_SLACK;
       t.labelText = durationLabel(durationMs);
@@ -286,7 +325,7 @@ export class GrapplingHook extends Container {
     this.runs.set(key, t);
   }
 
-  /** Release the latched run. Returns true if one was latched. */
+  /** Reel in the latched run. Returns true if one was latched. */
   resolveRun(key: string, isError: boolean | null, nowSec: number): boolean {
     const t = this.runs.get(key);
     if (!t || t.resolvedSec != null || t.blockedSec != null || t.snappedSec != null) return false;
@@ -302,6 +341,7 @@ export class GrapplingHook extends Container {
     t.resolvedSec = null;
     t.holdUntil = null;
     t.blockedSec = afterArrival(t, nowSec);
+    t.tautSince = t.tautSince ?? t.blockedSec;
     this.setBlockLabel(t, reason);
     return true;
   }
@@ -334,11 +374,12 @@ export class GrapplingHook extends Container {
   private ensureLabel(t: Throw, text: string, color: number) {
     if (t.label) {
       if (t.label.text !== text) t.label.text = text;
+      t.label.position.set(t.from.x, t.from.y - 12);
       return;
     }
     const label = new Text({ text, style: { fontSize: 10, fill: color } });
     label.anchor.set(0.5, 1);
-    label.position.set(t.b.x, t.b.y - 10);
+    label.position.set(t.from.x, t.from.y - 12);
     this.addChild(label);
     t.label = label;
   }
@@ -350,7 +391,7 @@ export class GrapplingHook extends Container {
     t.label = null;
   }
 
-  /** Per frame: draw all live throws and drop the finished ones. */
+  /** Per frame: track anchors, draw all live throws, drop the finished ones. */
   update(nowSec: number) {
     this.g.clear();
     const draw = (t: Throw): boolean => {
@@ -359,6 +400,12 @@ export class GrapplingHook extends Container {
         this.disposeLabel(t);
         return false;
       }
+      // Follow moving ends: characters walk, and the rail re-centers when the
+      // room resizes. A vanished anchor keeps the last known point.
+      const f = t.fromAnchor();
+      if (f) t.from = f;
+      const g = t.toAnchor();
+      if (g) t.to = g;
       this.drawThrow(t, state, nowSec);
       return true;
     };
@@ -377,64 +424,75 @@ export class GrapplingHook extends Container {
     switch (state) {
       case "flying": {
         const k = Math.min(1, (nowSec - t.startSec) / FLY);
-        this.drawFlightRope(t, k);
-        const head = parabolaPoint(t.a, t.b, k, t.arc);
+        const head = parabolaPoint(t.from, t.to, k, t.arc);
+        // Rope trailing the hook: sags behind the flight and ripples a little.
+        const slack = t.arc * 0.5 * (1 - k) + Math.sin(nowSec * 9) * 2 * (1 - k);
+        this.drawRope(t.from, head, slack, ROPE_COLOR, 0.6, nowSec);
         this.drawHookHead(head.x, head.y, ROPE_COLOR, 1);
         break;
       }
       case "latched": {
         const pulse = latchPulse(nowSec);
-        this.drawSlackRope(t, nowSec, ROPE_COLOR, 0.55 * pulse);
-        this.drawHookHead(t.b.x, t.b.y, ROPE_COLOR, 1);
-        this.g.circle(t.b.x, t.b.y, 7 + pulse * 3).fill({ color: ROPE_COLOR, alpha: 0.18 * pulse });
+        const taut = tautness(t.tautSince, nowSec);
+        const slack = t.arc * 0.4 * (1 - taut);
+        const color = ROPE_COLOR;
+        this.drawRope(t.from, t.to, slack, color, (0.4 + 0.35 * taut) * pulse, nowSec);
+        if (taut > 0.6) this.drawTransmission(t.from, t.to, nowSec, color);
+        this.drawHookHead(t.to.x, t.to.y, color, 1);
+        this.g.circle(t.to.x, t.to.y, 6 + pulse * 3).fill({ color, alpha: 0.15 * pulse });
         if (t.labelText) this.ensureLabel(t, t.labelText, t.labelColor);
         break;
       }
       case "blocked": {
         const age = nowSec - (t.blockedSec as number);
         const fade = Math.min(1, (BLOCKED_TTL - age) / 0.6);
-        this.drawSlackRope(t, nowSec, BLOCKED_COLOR, 0.7 * fade);
-        this.drawHookHead(t.b.x, t.b.y, BLOCKED_COLOR, fade);
-        this.drawBlockCross(t.b.x, t.b.y - 10, fade);
+        const taut = tautness(t.tautSince, nowSec);
+        this.drawRope(t.from, t.to, t.arc * 0.4 * (1 - taut), BLOCKED_COLOR, 0.7 * fade, nowSec);
+        this.drawHookHead(t.to.x, t.to.y, BLOCKED_COLOR, fade);
+        this.drawBlockCross(t.from.x, t.from.y - 6, fade);
         if (t.labelText) this.ensureLabel(t, t.labelText, t.labelColor);
         break;
       }
-      case "timeout": {
-        const fade = 1 - (nowSec - (t.timeoutAt as number)) / PENDING_TIMEOUT_FADE;
-        this.drawSlackRope(t, nowSec, TIMEOUT_COLOR, 0.4 * fade);
-        this.drawHookHead(t.b.x, t.b.y, TIMEOUT_COLOR, fade);
-        this.ensureLabel(t, tr("hookBeam.noResponse"), TIMEOUT_COLOR);
-        break;
-      }
-      case "returning": {
-        this.disposeLabel(t);
-        const rel = releaseSec(t) as number;
-        const k = Math.min(1, (nowSec - rel) / RETURN);
-        const fade = 1 - k;
-        const color = t.isError ? ERROR_COLOR : SUCCESS_COLOR;
-        const head = { x: lerp(t.b.x, t.a.x, k), y: lerp(t.b.y, t.a.y, k) };
-        this.g
-          .moveTo(t.b.x, t.b.y)
-          .lineTo(head.x, head.y)
-          .stroke({ width: 2, color, alpha: 0.5 * fade });
+      case "reeling": {
+        const reel = reelStart(t, nowSec) as { at: number; cause: ReelCause };
+        const k = Math.min(1, (nowSec - reel.at) / REEL);
+        // Reel like a fishing rod: the hook is wound back in along a rope that
+        // shortens toward the socket, accelerating as it goes.
+        const wound = k * k;
+        const head = { x: lerp(t.to.x, t.from.x, wound), y: lerp(t.to.y, t.from.y, wound) };
+        const color =
+          reel.cause === "timeout"
+            ? NEUTRAL_COLOR
+            : t.isError
+              ? ERROR_COLOR
+              : SUCCESS_COLOR;
+        const fade = 1 - wound * 0.5;
+        this.drawRope(t.from, head, t.arc * 0.25 * (1 - wound), color, 0.5 * fade, nowSec);
         this.drawHookHead(head.x, head.y, color, fade);
+        if (reel.cause === "timeout") {
+          const labelFade = Math.min(1, (REEL + TIMEOUT_LABEL_TTL - (nowSec - reel.at)) / 0.5);
+          this.ensureLabel(t, tr("hookBeam.noResponse"), NEUTRAL_COLOR);
+          if (t.label) t.label.alpha = labelFade;
+        } else {
+          this.disposeLabel(t);
+        }
         break;
       }
       case "snapped": {
         const age = nowSec - (t.snappedSec as number);
         const fade = 1 - age / SNAP_TTL;
         const drop = age * 26;
-        // Two dangling stubs: one hanging off the thrower, one falling from the socket.
-        const midA = { x: lerp(t.a.x, t.b.x, 0.3), y: lerp(t.a.y, t.b.y, 0.3) + 8 + drop * 0.4 };
+        // Two dangling stubs: one hanging off the socket, one falling with the hook.
+        const midF = { x: lerp(t.from.x, t.to.x, 0.3), y: lerp(t.from.y, t.to.y, 0.3) + 8 + drop * 0.4 };
         this.g
-          .moveTo(t.a.x, t.a.y)
-          .quadraticCurveTo(t.a.x, t.a.y + 12, midA.x, midA.y)
+          .moveTo(t.from.x, t.from.y)
+          .quadraticCurveTo(t.from.x, t.from.y + 12, midF.x, midF.y)
           .stroke({ width: 2, color: SNAP_COLOR, alpha: 0.5 * fade });
         this.g
-          .moveTo(t.b.x, t.b.y + drop)
-          .lineTo(lerp(t.b.x, t.a.x, 0.18), t.b.y + 10 + drop)
+          .moveTo(t.to.x, t.to.y + drop)
+          .lineTo(lerp(t.to.x, t.from.x, 0.18), t.to.y + 10 + drop)
           .stroke({ width: 2, color: SNAP_COLOR, alpha: 0.5 * fade });
-        this.drawHookHead(t.b.x, t.b.y + drop, SNAP_COLOR, fade);
+        this.drawHookHead(t.to.x, t.to.y + drop, SNAP_COLOR, fade);
         break;
       }
       case "done":
@@ -442,25 +500,30 @@ export class GrapplingHook extends Container {
     }
   }
 
-  /** Rope laid along the flight parabola from the thrower to the current head. */
-  private drawFlightRope(t: Throw, k: number) {
-    const steps = 12;
-    this.g.moveTo(t.a.x, t.a.y);
+  /** Rope between two points as a chain of segments hanging under gravity:
+   * per-vertex sag follows a parabolic profile plus a soft traveling wave, so
+   * the line reads as rope rather than a beam. sag 0 = pulled straight. */
+  private drawRope(a: Pt, head: Pt, sag: number, color: number, alpha: number, nowSec: number) {
+    const steps = 14;
+    this.g.moveTo(a.x, a.y);
     for (let i = 1; i <= steps; i++) {
-      const p = parabolaPoint(t.a, t.b, (k * i) / steps, t.arc);
-      this.g.lineTo(p.x, p.y);
+      const k = i / steps;
+      const droop = Math.sin(Math.PI * k) * sag;
+      const wave = Math.sin(k * Math.PI * 3 + nowSec * 2.4) * sag * 0.12;
+      this.g.lineTo(lerp(a.x, head.x, k), lerp(a.y, head.y, k) + droop + wave);
     }
-    this.g.stroke({ width: 2, color: ROPE_COLOR, alpha: 0.6 });
+    this.g.stroke({ width: 2, color, alpha });
   }
 
-  /** Slack rope hanging between the thrower and the latched hook, gently swaying. */
-  private drawSlackRope(t: Throw, nowSec: number, color: number, alpha: number) {
-    const midX = (t.a.x + t.b.x) / 2 + Math.sin(nowSec * 2.2) * 2;
-    const midY = (t.a.y + t.b.y) / 2 + t.arc * 0.35 + Math.sin(nowSec * 1.7) * 1.5;
-    this.g
-      .moveTo(t.a.x, t.a.y)
-      .quadraticCurveTo(midX, midY, t.b.x, t.b.y)
-      .stroke({ width: 2, color, alpha });
+  /** Pulses traveling down a taut rope (socket -> character): the hook is
+   * actively holding the agent and "something is coming through the line". */
+  private drawTransmission(a: Pt, b: Pt, nowSec: number, color: number) {
+    for (let i = 0; i < 2; i++) {
+      const k = ((nowSec * 0.8 + i * 0.5) % 1 + 1) % 1;
+      this.g
+        .circle(lerp(a.x, b.x, k), lerp(a.y, b.y, k), 2.4)
+        .fill({ color, alpha: 0.9 * Math.sin(Math.PI * k) });
+    }
   }
 
   /** A tiny grappling hook: rope eye + J-shaped fluke hanging below the head. */

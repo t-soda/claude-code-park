@@ -9,13 +9,15 @@ import {
   pairKey,
   parabolaPoint,
   PENDING_TIMEOUT,
-  PENDING_TIMEOUT_FADE,
   reasonExcerpt,
+  reelStart,
   reenactHold,
-  releaseSec,
-  RETURN,
+  REEL,
   SNAP_TTL,
+  TAUT_RAMP,
+  tautness,
   throwState,
+  TIMEOUT_LABEL_TTL,
   type ThrowTiming,
 } from "./GrapplingHook";
 import type { HookFlash } from "../../stores/hookStore";
@@ -69,25 +71,26 @@ describe("reenactHold", () => {
 });
 
 describe("throwState", () => {
-  it("plain pending: flying → latched → timeout → done", () => {
+  it("plain pending: flying → latched → reeling on timeout → done", () => {
     const t = tm({ timeoutAt: 100 + PENDING_TIMEOUT });
     expect(throwState(t, 100.1)).toBe("flying");
     expect(throwState(t, 100 + FLY + 0.01)).toBe("latched");
-    expect(throwState(t, 100 + PENDING_TIMEOUT + 0.5)).toBe("timeout");
-    expect(throwState(t, 100 + PENDING_TIMEOUT + PENDING_TIMEOUT_FADE + 0.1)).toBe("done");
+    expect(throwState(t, 100 + PENDING_TIMEOUT + 0.1)).toBe("reeling");
+    // The timeout reel keeps the "no response" label up a bit longer.
+    expect(throwState(t, 100 + PENDING_TIMEOUT + REEL + TIMEOUT_LABEL_TTL + 0.1)).toBe("done");
   });
 
-  it("resolved: returning → done", () => {
+  it("resolved: reeling → done", () => {
     const t = tm({ resolvedSec: 105 });
-    expect(throwState(t, 105.1)).toBe("returning");
-    expect(throwState(t, 105 + RETURN + 0.1)).toBe("done");
+    expect(throwState(t, 105.1)).toBe("reeling");
+    expect(throwState(t, 105 + REEL + 0.1)).toBe("done");
   });
 
-  it("auto-release via holdUntil: latched → returning → done", () => {
+  it("auto-reel via holdUntil: latched → reeling → done", () => {
     const t = tm({ holdUntil: 101 });
     expect(throwState(t, 100.9)).toBe("latched");
-    expect(throwState(t, 101.1)).toBe("returning");
-    expect(throwState(t, 101 + RETURN + 0.1)).toBe("done");
+    expect(throwState(t, 101.1)).toBe("reeling");
+    expect(throwState(t, 101 + REEL + 0.1)).toBe("done");
   });
 
   it("blocked stays red for BLOCKED_TTL then fades", () => {
@@ -109,11 +112,32 @@ describe("throwState", () => {
   });
 });
 
-describe("releaseSec", () => {
-  it("prefers the explicit resolve over the auto-release", () => {
-    expect(releaseSec(tm({ resolvedSec: 105, holdUntil: 110 }))).toBe(105);
-    expect(releaseSec(tm({ holdUntil: 110 }))).toBe(110);
-    expect(releaseSec(tm())).toBeNull();
+describe("reelStart", () => {
+  it("prefers the explicit resolve, then the auto-reel, then the timeout", () => {
+    expect(reelStart(tm({ resolvedSec: 105, holdUntil: 101 }), 120)).toEqual({
+      at: 105,
+      cause: "resolved",
+    });
+    expect(reelStart(tm({ holdUntil: 110, timeoutAt: 111 }), 120)).toEqual({
+      at: 110,
+      cause: "auto",
+    });
+    expect(reelStart(tm({ timeoutAt: 110 }), 120)).toEqual({ at: 110, cause: "timeout" });
+  });
+
+  it("null while the deadline has not passed", () => {
+    expect(reelStart(tm({ holdUntil: 110 }), 109)).toBeNull();
+    expect(reelStart(tm({ timeoutAt: 110 }), 109)).toBeNull();
+    expect(reelStart(tm(), 200)).toBeNull();
+  });
+});
+
+describe("tautness", () => {
+  it("ramps 0→1 over TAUT_RAMP and clamps at both ends", () => {
+    expect(tautness(null, 200)).toBe(0);
+    expect(tautness(100, 99)).toBe(0);
+    expect(tautness(100, 100 + TAUT_RAMP / 2)).toBeCloseTo(0.5);
+    expect(tautness(100, 100 + TAUT_RAMP * 3)).toBe(1);
   });
 });
 
