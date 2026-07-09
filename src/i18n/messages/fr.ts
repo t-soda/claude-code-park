@@ -216,6 +216,8 @@ export const fr: Messages = {
     // {error} est la raison de l'échec.
     fetchError: "Échec de la récupération du journal : {error}",
     empty: "Aucun journal d'activité enregistré.",
+    // Libellé pour une ligne où le cycle de vie Stop/SubagentStop lui-même a été bloqué, pas un outil spécifique.
+    blockedStop: "Hook Stop bloqué",
   },
 
   office: {

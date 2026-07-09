@@ -12,9 +12,11 @@ export type TimelineEntry = {
  */
 ts: string | null, 
 /**
- * Work kind.
+ * Work kind. None only for a hook-block row (see `block_reason`) — mirrors
+ * ReplayEvent's kind/work split rather than reusing a WorkKind variant as a
+ * meaningless placeholder for a row that isn't an activity change.
  */
-kind: WorkKind, 
+kind: WorkKind | null, 
 /**
  * File being edited, command description, etc.
  */
@@ -26,4 +28,10 @@ tool_name: string | null,
 /**
  * The skill name that was active at that point.
  */
-active_skill: string | null, };
+active_skill: string | null, 
+/**
+ * Set only for a row synthesized from a hook block (PreToolUse rejection,
+ * PostToolUse/Stop hook_blocking_error, or a blocked stop_hook_summary).
+ * Rows with no reason text are not emitted, so this is never Some("").
+ */
+block_reason: string | null, };

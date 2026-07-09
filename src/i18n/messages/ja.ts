@@ -216,6 +216,8 @@ export const ja = {
     // {error} は失敗理由。
     fetchError: "ログの取得に失敗しました: {error}",
     empty: "記録された作業ログはありません。",
+    // 特定のツールではなく Stop/SubagentStop 自体がブロックされた行のラベル。
+    blockedStop: "Stopフックがブロック",
   },
 
   office: {

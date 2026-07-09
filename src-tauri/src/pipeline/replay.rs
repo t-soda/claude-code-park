@@ -101,7 +101,9 @@ impl ReplayBuilder {
                 at_ms,
                 kind: ReplayEventKind::Activity,
                 agent_id: self.agent_id.clone(),
-                work: Some(row.kind),
+                // row_for never returns a blocked row (that path is build_timeline-only),
+                // so kind is always Some here; carried through as-is.
+                work: row.kind,
                 tool_name: row.tool_name.clone(),
                 detail: row.detail,
                 active_skill: self.active_skill.clone(),
