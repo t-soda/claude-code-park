@@ -105,7 +105,7 @@ export function flowPhases(nowSec: number, spacing = FLOW_SPACING, speed = FLOW_
 
 /**
  * Arcs between a caller (orchestrator or subagent) and the subagents it spawned.
- * A single Graphics redrawn every frame in scene/world space (same pattern as HookBeam).
+ * A single Graphics redrawn every frame in scene/world space (same pattern as GrapplingHook).
  */
 export class DelegationArcs extends Container {
   private g = new Graphics();

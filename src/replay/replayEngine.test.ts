@@ -172,6 +172,32 @@ describe("createReplayCursor", () => {
     expect(back.frame.sessions[0].current.kind).toBe("Thinking");
   });
 
+  it("keeps a subagent's activity when its SubagentStop was blocked (the hook kept it working)", () => {
+    const sub = {
+      agent_id: "A",
+      subagent_type: "reviewer",
+      description: null,
+      model: null,
+      spawn_ms: 0,
+      stop_ms: 9000,
+      parent_agent_id: null,
+      spawn_depth: null,
+    };
+    const cursor = createReplayCursor(
+      data(
+        [
+          ev(0, "SubagentSpawn"),
+          ev(1000, "Activity", { agent_id: "A", work: "Running", tool_name: "Bash" }),
+          ev(3000, "SubagentStop", { agent_id: "A", outcome: "Blocked" }),
+          ev(9000, "SubagentStop", { agent_id: "A" }),
+        ],
+        [sub]
+      )
+    );
+    expect(cursor.seek(3001).sessions[0].subagents[0].current.kind).toBe("Running");
+    expect(cursor.seek(9001).sessions[0].subagents[0].current.kind).toBe("Idle");
+  });
+
   it("clears a subagent's activity to Idle on SubagentStop instead of lingering on its last tool", () => {
     const sub = {
       agent_id: "A",
@@ -251,6 +277,62 @@ describe("flashesFor", () => {
   it("maps TurnEnd to Stop and UserPrompt to UserPromptSubmit", () => {
     expect(flashesFor([ev(0, "TurnEnd")], 0, "SID").SID.event).toBe("Stop");
     expect(flashesFor([ev(0, "UserPrompt")], 0, "SID").SID.event).toBe("UserPromptSubmit");
+  });
+
+  it("maps HookRunStart to the actor's stop lifecycle with phase run-start", () => {
+    const orch = flashesFor(
+      [ev(0, "HookRunStart", { duration_ms: 2900, hook_command: "afplay Funk.aiff" })],
+      0,
+      "SID"
+    ).SID;
+    expect(orch.event).toBe("Stop");
+    expect(orch.phase).toBe("run-start");
+    expect(orch.durationMs).toBe(2900);
+    expect(orch.hookCommand).toBe("afplay Funk.aiff");
+    const sub = flashesFor([ev(0, "HookRunStart", { agent_id: "A" })], 0, "SID").A;
+    expect(sub.event).toBe("SubagentStop");
+    expect(sub.phase).toBe("run-start");
+  });
+
+  it("carries recorded outcomes through to the flash", () => {
+    const f = flashesFor(
+      [
+        ev(0, "TurnEnd", {
+          outcome: "Blocked",
+          duration_ms: 900,
+          hook_command: "./gate.sh",
+          block_reason: "keep going",
+        }),
+      ],
+      0,
+      "SID"
+    ).SID;
+    expect(f.outcome).toBe("Blocked");
+    expect(f.durationMs).toBe(900);
+    expect(f.hookCommand).toBe("./gate.sh");
+    expect(f.blockReason).toBe("keep going");
+  });
+
+  it("a bare turn_duration twin crossing with the rich summary never wins the slot", () => {
+    // Both orders occur in real transcripts (written at the same instant).
+    const rich = ev(0, "TurnEnd", { outcome: "Completed", duration_ms: 2900 });
+    const bare = ev(0, "TurnEnd");
+    expect(flashesFor([rich, bare], 0, "SID").SID.outcome).toBe("Completed");
+    expect(flashesFor([bare, rich], 0, "SID").SID.outcome).toBe("Completed");
+  });
+
+  it("run-start followed by its outcome in one tick resolves to the outcome", () => {
+    const flashes = flashesFor(
+      [
+        ev(0, "HookRunStart", { duration_ms: 2900 }),
+        ev(0, "TurnEnd", { outcome: "Completed", duration_ms: 2900 }),
+      ],
+      0,
+      "SID"
+    );
+    // The renderer then plays the compressed reenactment for the finished run.
+    expect(flashes.SID.phase).toBe("fire");
+    expect(flashes.SID.outcome).toBe("Completed");
   });
 });
 

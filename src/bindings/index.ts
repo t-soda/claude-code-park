@@ -8,6 +8,7 @@ export type { CommandDef } from "./CommandDef";
 export type { HookAction } from "./HookAction";
 export type { HookEntry } from "./HookEntry";
 export type { HookEvent } from "./HookEvent";
+export type { HookOutcome } from "./HookOutcome";
 export type { ScopedHook } from "./ScopedHook";
 export type { InitialState } from "./InitialState";
 export type { MetricsWindow } from "./MetricsWindow";

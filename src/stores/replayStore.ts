@@ -8,7 +8,7 @@ import {
   type ReplayCursor,
   type ReplayFrame,
 } from "../replay/replayEngine";
-import { pruneEvents, type HookFlash } from "./hookStore";
+import { mergeFlash, pruneEvents, type HookFlash } from "./hookStore";
 
 /** Same badge lifetime as the live hookStore. */
 const FLASH_TTL_MS = 3_000;
@@ -177,10 +177,15 @@ export const useReplayStore = create<ReplayState>((set, get) => ({
     const t = Math.min(duration, s.playheadMs + dtMs * s.speed);
     const { frame, crossed } = cursor.advance(t);
     if (crossed.length > 0) {
-      flashes = {
-        ...flashes,
-        ...flashesFor(crossed, nowRealMs, s.data.meta.session_id),
-      };
+      // Per-key merge instead of a blind spread: a bare turn_duration Stop
+      // crossing one tick after its rich stop_hook_summary twin must not
+      // displace the recorded execution.
+      const incoming = flashesFor(crossed, nowRealMs, s.data.meta.session_id);
+      const merged = { ...flashes };
+      for (const [key, flash] of Object.entries(incoming)) {
+        merged[key] = mergeFlash(merged[key], flash);
+      }
+      flashes = merged;
     }
     set({
       playheadMs: t,
