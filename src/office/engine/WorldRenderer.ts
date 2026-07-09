@@ -733,37 +733,42 @@ export class WorldRenderer {
       const sid = st.orch.sessionId;
       this.maybeTrigger(sid, flashes[sid], (label) => {
         st.orch.triggerHook(label, nowSec);
-        this.fireRail(st, flashes[sid], sid, st.orch.x, st.orch.y + st.orch.headOffsetY, nowSec);
+        this.fireRail(st, flashes[sid], sid, st.orch, nowSec);
       });
       for (const [agentId, emp] of st.employees) {
         this.maybeTrigger(agentId, flashes[agentId], (label) => {
           emp.triggerHook(label, nowSec);
-          this.fireRail(st, flashes[agentId], agentId, emp.x, emp.y + emp.headOffsetY, nowSec);
+          this.fireRail(st, flashes[agentId], agentId, emp, nowSec);
         });
       }
     }
   }
 
-  /** Handle a firing event by throwing/resolving grappling hooks.
-   * Reconstructed firings gate on registered hooks (a throw at an empty socket
-   * teaches nothing); recorded executions (flash.outcome set) skip the gate —
-   * the transcript proves a hook ran even when the config can't be read. */
+  /** Handle a firing event by launching/resolving grappling hooks. The rail
+   * socket is the thrower and the character is what it catches — a hook is a
+   * trap on the lifecycle, so it grips the agent when the event fires.
+   * Reconstructed firings gate on registered hooks (a throw from an empty
+   * socket teaches nothing); recorded executions (flash.outcome set) skip the
+   * gate — the transcript proves a hook ran even when the config can't be read.
+   * Both rope ends are live anchors: characters walk around and the rail
+   * re-centers when the room resizes, so positions are re-read every frame. */
   private fireRail(
     st: RoomView,
     flash: HookFlash | undefined,
     agentKey: string,
-    charX: number,
-    charY: number,
+    sprite: OrchestratorSprite | EmployeeSprite,
     nowSec: number
   ) {
     if (!flash) return;
     const slot = eventToSlotIndex(flash.event);
     if (slot < 0) return;
-    const from = { x: charX, y: charY };
-    const socketPos = () => {
+    const socket = () => {
+      if (st.rail.destroyed) return null;
       const local = st.rail.socketLocalPos(slot);
       return { x: st.rail.x + local.x, y: st.rail.y + local.y };
     };
+    const agent = () =>
+      sprite.destroyed ? null : { x: sprite.x, y: sprite.y + sprite.headOffsetY };
     const key = pairKey(flash.correlationId, agentKey, flash.tool);
     // Recorded Stop/SubagentStop runs latch one hook per actor.
     const runKey = `run:${agentKey}`;
@@ -776,37 +781,37 @@ export class WorldRenderer {
       // when nothing is latched on the affected lifecycle.
       if (flash.event === "PreToolUse" && this.hook.blockPending(key, reason, nowSec)) return;
       if (flash.event === "PostToolUse") {
-        // The tool ran (its pending hook releases as an error); the Post hook's
-        // complaint latches red on its own socket.
+        // The tool ran (its pending hook reels in as an error); the Post hook's
+        // complaint grips red from its own socket.
         this.hook.resolvePending(key, true, nowSec);
       }
       if (isStop && this.hook.blockRun(runKey, reason, nowSec)) return;
-      this.hook.throwBlocked(from, socketPos(), nowSec, reason);
+      this.hook.throwBlocked(socket, agent, nowSec, reason);
       return;
     }
     if (flash.outcome === "Cancelled") {
       st.rail.trigger(slot, "blocked", nowSec);
       if (isStop && this.hook.snapRun(runKey, nowSec)) return;
-      this.hook.throwSnap(from, socketPos(), nowSec);
+      this.hook.throwSnap(socket, agent, nowSec);
       return;
     }
     if (flash.phase === "run-start") {
-      // Replay: the recorded run is starting right now; latch until the
+      // Replay: the recorded run is starting right now; grip until the
       // matching outcome flash crosses (durationMs caps a scrubbed replay).
       st.rail.trigger(slot, "fired", nowSec);
-      this.hook.latchRun(runKey, from, socketPos(), nowSec, flash.durationMs);
+      this.hook.latchRun(runKey, socket, agent, nowSec, flash.durationMs);
       return;
     }
     if (flash.outcome === "Completed") {
       st.rail.trigger(slot, "fired", nowSec);
-      // Replay releases the latched run; live never saw the start, so reenact
-      // the whole run compressed (throw, hold scaled to durationMs, release).
+      // Replay reels in the latched run; live never saw the start, so reenact
+      // the whole run compressed (throw, grip scaled to durationMs, reel in).
       if (this.hook.resolveRun(runKey, flash.isError, nowSec)) return;
-      this.hook.throwReenact(from, socketPos(), nowSec, flash.durationMs ?? 0, flash.isError);
+      this.hook.throwReenact(socket, agent, nowSec, flash.durationMs ?? 0, flash.isError);
       return;
     }
 
-    // PostToolUse: just release the matching pending hook (no separate throw).
+    // PostToolUse: just reel in the matching pending hook (no separate throw).
     // Only when resolved, briefly light the socket (orphan Posts are ignored).
     if (flash.event === "PostToolUse") {
       if (this.hook.resolvePending(key, flash.isError, nowSec)) {
@@ -821,9 +826,9 @@ export class WorldRenderer {
     st.rail.trigger(slot, "fired", nowSec);
 
     if (flash.event === "PreToolUse") {
-      this.hook.startPending(key, from, socketPos(), nowSec);
+      this.hook.startPending(key, socket, agent, nowSec);
     } else {
-      this.hook.throwRelease(from, socketPos(), nowSec);
+      this.hook.throwRelease(socket, agent, nowSec);
     }
   }
 
