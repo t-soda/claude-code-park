@@ -96,6 +96,10 @@ export function createReplayCursor(data: ReplayData): ReplayCursor {
         description: sub.description,
         model: sub.model,
         started_at: null,
+        // Liveness bookkeeping is a live-tracking concern; replay derives status
+        // purely from the timeline above.
+        last_event_at: null,
+        completed_at: null,
         // Ended after the linger window: the renderer's existing filter then
         // removes the sprite (the desired "employee leaves" behavior).
         status: tMs <= sub.stop_ms + LINGER_MS ? "Active" : "Ended",

@@ -16,6 +16,11 @@ pub struct RawEntry {
     pub entrypoint: Option<String>,
     /// The subtype of a system entry (turn_duration, etc.).
     pub subtype: Option<String>,
+    /// Top-level content of non-message entries. queue-operation entries carry the
+    /// task-notification text (background agent stopped) here. Kept raw so a future
+    /// CLI writing a non-string shape degrades to "no notification" instead of
+    /// failing the whole line's parse (which would also drop its timestamp/meta).
+    pub content: Option<serde_json::Value>,
     pub message: Option<RawMessage>,
 }
 
@@ -50,6 +55,35 @@ pub struct ContentBlock {
     // tool_result
     pub is_error: Option<bool>,
     /// The id of the tool_use that the tool_result refers to (for Pre/Post pairing).
+    pub tool_use_id: Option<String>,
+    /// tool_result content: a string or an array of blocks. Kept raw because only
+    /// the leading text is ever inspected (async-launch ack detection).
+    pub content: Option<serde_json::Value>,
+}
+
+impl ContentBlock {
+    /// The leading text of a tool_result's content (string content, or the first
+    /// text block for array content). None when there is no text.
+    pub fn result_text(&self) -> Option<&str> {
+        match self.content.as_ref()? {
+            serde_json::Value::String(s) => Some(s.as_str()),
+            serde_json::Value::Array(blocks) => blocks.iter().find_map(|b| {
+                (b.get("type")?.as_str()? == "text")
+                    .then(|| b.get("text")?.as_str())
+                    .flatten()
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// A background agent's stop notification, parsed out of a queue-operation entry.
+/// Fires each time the agent stops (it may be resumed and notify again later).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskNotification {
+    /// The agent id (task-id) that stopped.
+    pub task_id: String,
+    /// The Agent tool_use id that spawned it.
     pub tool_use_id: Option<String>,
 }
 
@@ -121,6 +155,23 @@ impl RawEntry {
         }
     }
 
+    /// Parses a background agent's stop notification. Only queue-operation entries
+    /// carry it in top-level content (the duplicate attachment entry nests it under
+    /// attachment.prompt and is deliberately not parsed, to process each stop once).
+    pub fn task_notification(&self) -> Option<TaskNotification> {
+        if self.entry_type.as_deref() != Some("queue-operation") {
+            return None;
+        }
+        let content = self.content.as_ref()?.as_str()?;
+        if !content.contains("<task-notification>") {
+            return None;
+        }
+        Some(TaskNotification {
+            task_id: tag_text(content, "task-id")?.to_string(),
+            tool_use_id: tag_text(content, "tool-use-id").map(str::to_string),
+        })
+    }
+
     /// Whether it is a turn-end marker (system/turn_duration, etc. = transition to waiting for user input).
     pub fn is_turn_end(&self) -> bool {
         self.entry_type.as_deref() == Some("system")
@@ -128,5 +179,91 @@ impl RawEntry {
                 self.subtype.as_deref(),
                 Some("turn_duration") | Some("stop_hook_summary")
             )
+    }
+}
+
+/// The text between <tag> and </tag> (first occurrence).
+fn tag_text<'a>(s: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let start = s.find(&open)? + open.len();
+    let end = s[start..].find(&format!("</{tag}>"))? + start;
+    Some(s[start..end].trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn e(json: &str) -> RawEntry {
+        serde_json::from_str(json).expect("fixture should parse")
+    }
+
+    /// A queue-operation entry carrying a task-notification yields the stopped
+    /// agent's task-id and the spawning tool_use id.
+    #[test]
+    fn parses_task_notification() {
+        let entry = e(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-07-05T11:51:26.492Z","sessionId":"S","content":"<task-notification>\n<task-id>a784c3</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<status>completed</status>\n</task-notification>"}"#,
+        );
+        let n = entry.task_notification().expect("should parse");
+        assert_eq!(n.task_id, "a784c3");
+        assert_eq!(n.tool_use_id.as_deref(), Some("toolu_01"));
+    }
+
+    /// Other entry shapes yield no notification: a queue-operation without the
+    /// marker, and a user entry whose message merely mentions it.
+    #[test]
+    fn ignores_non_notification_entries() {
+        let plain = e(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-07-05T11:51:26.492Z","sessionId":"S","content":"remember to run tests"}"#,
+        );
+        assert_eq!(plain.task_notification(), None);
+        let user = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:51:26.492Z","sessionId":"S","message":{"role":"user","content":"<task-notification>fake</task-notification>"}}"#,
+        );
+        assert_eq!(user.task_notification(), None);
+    }
+
+    /// A non-string top-level content (should a future CLI write one) must not
+    /// fail the line's parse — the entry still yields its timestamp and simply
+    /// carries no notification.
+    #[test]
+    fn non_string_content_degrades_to_no_notification() {
+        let entry = e(
+            r#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-07-05T11:51:26.492Z","sessionId":"S","content":{"kind":"structured","text":"<task-notification>x</task-notification>"}}"#,
+        );
+        assert_eq!(entry.task_notification(), None);
+        assert_eq!(entry.timestamp.as_deref(), Some("2026-07-05T11:51:26.492Z"));
+    }
+
+    /// result_text reads string content directly and digs the first text block
+    /// out of array content.
+    #[test]
+    fn result_text_handles_both_content_shapes() {
+        let s = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"plain"}]}}"#,
+        );
+        assert_eq!(s.tool_results().next().unwrap().result_text(), Some("plain"));
+        let arr = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"Async agent launched successfully."}]}]}}"#,
+        );
+        assert_eq!(
+            arr.tool_results().next().unwrap().result_text(),
+            Some("Async agent launched successfully.")
+        );
+    }
+
+    /// Content shapes with no leading text yield None: an array without text
+    /// blocks, and a numeric content.
+    #[test]
+    fn result_text_none_without_text() {
+        let no_text = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","source":{}}]}]}}"#,
+        );
+        assert_eq!(no_text.tool_results().next().unwrap().result_text(), None);
+        let numeric = e(
+            r#"{"type":"user","timestamp":"2026-07-05T11:00:00.000Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":42}]}}"#,
+        );
+        assert_eq!(numeric.tool_results().next().unwrap().result_text(), None);
     }
 }
