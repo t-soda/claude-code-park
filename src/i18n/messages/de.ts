@@ -212,6 +212,8 @@ export const de: Messages = {
     // {error} ist der Fehlergrund.
     fetchError: "Log konnte nicht abgerufen werden: {error}",
     empty: "Keine Arbeitslogs aufgezeichnet.",
+    // Beschriftung für eine Zeile, in der der Stop/SubagentStop-Lifecycle selbst blockiert wurde, nicht ein bestimmtes Tool.
+    blockedStop: "Stop-Hook blockiert",
   },
 
   office: {

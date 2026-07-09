@@ -212,6 +212,8 @@ export const ko: Messages = {
     // {error} 는 실패 이유.
     fetchError: "로그 가져오기에 실패했습니다: {error}",
     empty: "기록된 작업 로그가 없습니다.",
+    // 특정 도구가 아니라 Stop/SubagentStop 라이프사이클 자체가 차단된 행의 라벨.
+    blockedStop: "Stop 훅이 차단함",
   },
 
   office: {

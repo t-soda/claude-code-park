@@ -45,11 +45,21 @@ describe("dialogMaxHeight", () => {
 });
 
 describe("isToolRow", () => {
-  const base: TimelineEntry = { ts: null, kind: "Reading", detail: null, tool_name: null, active_skill: null };
+  const base: TimelineEntry = {
+    ts: null,
+    kind: "Reading",
+    detail: null,
+    tool_name: null,
+    active_skill: null,
+    block_reason: null,
+  };
   it("a tool row if tool_name is present", () => {
     expect(isToolRow({ ...base, tool_name: "Read" })).toBe(true);
   });
   it("a non-tool row (thinking / turn boundary) if tool_name is absent", () => {
     expect(isToolRow({ ...base, kind: "Thinking" })).toBe(false);
+  });
+  it("not a tool row for a hook-block row, even though it carries the blocked tool's name", () => {
+    expect(isToolRow({ ...base, kind: null, tool_name: "Bash", block_reason: "not allowed" })).toBe(false);
   });
 });

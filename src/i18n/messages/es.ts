@@ -219,6 +219,8 @@ export const es: Messages = {
     // {error} es el motivo del fallo.
     fetchError: "No se pudo obtener el registro: {error}",
     empty: "No hay ningún registro de trabajo.",
+    // Etiqueta para una fila en la que se bloqueó el propio ciclo de vida Stop/SubagentStop, no una herramienta específica.
+    blockedStop: "Hook de Stop bloqueado",
   },
 
   office: {

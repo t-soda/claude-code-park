@@ -659,6 +659,19 @@ body,
   font-size: 11px;
   opacity: 0.5;
 }
+.log-row-blocked {
+  flex-wrap: wrap;
+}
+.log-row-blocked .log-kind {
+  color: #ef4444;
+}
+.log-blocked-reason {
+  flex: 1 1 100%;
+  font-size: 11px;
+  opacity: 0.85;
+  white-space: normal;
+  word-break: break-word;
+}
 .log-empty {
   font-size: 12px;
   opacity: 0.6;

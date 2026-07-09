@@ -212,6 +212,8 @@ export const zh: Messages = {
     // {error} 为失败原因。
     fetchError: "获取日志失败: {error}",
     empty: "没有记录的工作日志。",
+    // 用于 Stop/SubagentStop 生命周期本身被阻止（而非特定工具）的行标签。
+    blockedStop: "Stop 钩子已阻止",
   },
 
   office: {

@@ -51,9 +51,13 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-/** Whether the row comes from a tool execution (has tool_name). Used to decide whether to hide the tool-name tag when lifecycleView is OFF. */
+/**
+ * Whether the row comes from an executed tool (has tool_name and isn't a hook-block
+ * row — a blocked row's tool_name names the tool the hook rejected, not one that ran).
+ * Used to decide whether to hide the tool-name tag when lifecycleView is OFF.
+ */
 export function isToolRow(entry: TimelineEntry): boolean {
-  return entry.tool_name != null;
+  return entry.block_reason == null && entry.tool_name != null;
 }
 
 interface OpenLogState {

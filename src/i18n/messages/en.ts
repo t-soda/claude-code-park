@@ -212,6 +212,8 @@ export const en: Messages = {
     // {error} is the failure reason.
     fetchError: "Failed to fetch the log: {error}",
     empty: "No work logs recorded.",
+    // Label for a row where the Stop/SubagentStop lifecycle itself was blocked, not a specific tool.
+    blockedStop: "Stop hook blocked",
   },
 
   office: {

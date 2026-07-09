@@ -81,6 +81,20 @@ export function CharacterLogDialog() {
 
 function LogRow({ entry, showTool }: { entry: TimelineEntry; showTool: boolean }) {
   const t = useT();
+  if (entry.block_reason) {
+    return (
+      <div className="log-row log-row-blocked">
+        <span className="log-kind">
+          ⛔ {entry.tool_name ?? t("characterLog.blockedStop")}
+        </span>
+        <span className="log-time">{timeLabel(entry.ts)}</span>
+        <div className="log-blocked-reason">{entry.block_reason}</div>
+      </div>
+    );
+  }
+  // Invariant from the backend: block_reason and kind are mutually exclusive
+  // (kind is only null for the blocked row handled above).
+  if (!entry.kind) return null;
   return (
     <div className="log-row">
       <span className="log-kind">{t(`activityLog.${entry.kind}` as MessageKey)}</span>
