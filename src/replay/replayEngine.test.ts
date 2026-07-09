@@ -172,6 +172,32 @@ describe("createReplayCursor", () => {
     expect(back.frame.sessions[0].current.kind).toBe("Thinking");
   });
 
+  it("keeps a subagent's activity when its SubagentStop was blocked (the hook kept it working)", () => {
+    const sub = {
+      agent_id: "A",
+      subagent_type: "reviewer",
+      description: null,
+      model: null,
+      spawn_ms: 0,
+      stop_ms: 9000,
+      parent_agent_id: null,
+      spawn_depth: null,
+    };
+    const cursor = createReplayCursor(
+      data(
+        [
+          ev(0, "SubagentSpawn"),
+          ev(1000, "Activity", { agent_id: "A", work: "Running", tool_name: "Bash" }),
+          ev(3000, "SubagentStop", { agent_id: "A", outcome: "Blocked" }),
+          ev(9000, "SubagentStop", { agent_id: "A" }),
+        ],
+        [sub]
+      )
+    );
+    expect(cursor.seek(3001).sessions[0].subagents[0].current.kind).toBe("Running");
+    expect(cursor.seek(9001).sessions[0].subagents[0].current.kind).toBe("Idle");
+  });
+
   it("clears a subagent's activity to Idle on SubagentStop instead of lingering on its last tool", () => {
     const sub = {
       agent_id: "A",

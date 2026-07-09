@@ -73,9 +73,12 @@ export function createReplayCursor(data: ReplayData): ReplayCursor {
 
   function applyEvent(ev: ReplayEvent): void {
     // A stopped subagent's last activity must not linger, showing "still running
-    // Bash" for the whole despawn window after it has actually stopped.
+    // Bash" for the whole despawn window after it has actually stopped. A blocked
+    // stop is the opposite: the hook kept the agent working, so its activity stays.
     if (ev.kind === "SubagentStop") {
-      if (ev.agent_id !== null) agentState.set(ev.agent_id, IDLE);
+      if (ev.agent_id !== null && ev.outcome !== "Blocked") {
+        agentState.set(ev.agent_id, IDLE);
+      }
       return;
     }
     if (ev.kind !== "Activity") return;
