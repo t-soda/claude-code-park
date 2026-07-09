@@ -17,6 +17,10 @@ export function ev(
     correlation_id: null,
     is_error: null,
     text: null,
+    outcome: null,
+    duration_ms: null,
+    hook_command: null,
+    block_reason: null,
     ...over,
   };
 }

@@ -35,12 +35,9 @@ pub fn apply_main(
     if is_new {
         out.push(crate::hook_events::HookEvent {
             session_id: session_id.to_string(),
-            agent_id: None,
             event: "SessionStart".to_string(),
-            tool_name: None,
             ts: entries[0].timestamp.clone().unwrap_or_default(),
-            correlation_id: None,
-            is_error: None,
+            ..Default::default()
         });
     }
     let session = world
@@ -149,6 +146,11 @@ pub fn apply_sub(
 /// The lifecycle event reconstructed from a single entry.
 /// For PostToolUse, the caller passes the most recent tool name as `post_tool`
 /// (handled the same for main/sub). If is_sub=true, turn_end becomes SubagentStop.
+///
+/// Most firings are reconstructed facts (a tool_use proves PreToolUse fired) and
+/// carry no outcome. Entries that record a real hook execution — stop_hook_summary,
+/// hook_blocking_error / hook_cancelled attachments, and a PreToolUse rejection
+/// written into a tool_result — additionally carry outcome / duration / command.
 pub(crate) fn reconstruct(
     e: &RawEntry,
     session_id: &str,
@@ -156,32 +158,80 @@ pub(crate) fn reconstruct(
     post_tool: Option<String>,
     is_sub: bool,
 ) -> Option<crate::hook_events::HookEvent> {
-    let ts = e.timestamp.clone().unwrap_or_default();
-    let (event, tool_name, correlation_id, is_error): (
-        &str,
-        Option<String>,
-        Option<String>,
-        Option<bool>,
-    ) = if e.is_user_prompt() && !is_sub {
-        ("UserPromptSubmit", None, None, None)
-    } else if let Some(tb) = e.last_tool_use() {
-        ("PreToolUse", tb.name.clone(), tb.id.clone(), None)
-    } else if let Some(tr) = e.tool_results().next() {
-        ("PostToolUse", post_tool, tr.tool_use_id.clone(), tr.is_error)
-    } else if e.is_turn_end() {
-        (if is_sub { "SubagentStop" } else { "Stop" }, None, None, None)
-    } else {
-        return None;
-    };
-    Some(crate::hook_events::HookEvent {
+    use crate::hook_events::{HookEvent, HookOutcome};
+    /// Stop lifecycle names swap for the subagent variant inside a sub transcript.
+    fn stop_event(event: &str, is_sub: bool) -> String {
+        if is_sub && event == "Stop" {
+            "SubagentStop".to_string()
+        } else {
+            event.to_string()
+        }
+    }
+    let mut ev = HookEvent {
         session_id: session_id.to_string(),
         agent_id: agent_id.map(str::to_string),
-        event: event.to_string(),
-        tool_name,
-        ts,
-        correlation_id,
-        is_error,
-    })
+        ts: e.timestamp.clone().unwrap_or_default(),
+        ..Default::default()
+    };
+    if e.is_user_prompt() && !is_sub {
+        ev.event = "UserPromptSubmit".to_string();
+    } else if let Some(tb) = e.last_tool_use() {
+        ev.event = "PreToolUse".to_string();
+        ev.tool_name = tb.name.clone();
+        ev.correlation_id = tb.id.clone();
+    } else if let Some((tr, block)) = e
+        .tool_results()
+        .find_map(|tr| tr.pre_hook_block().map(|b| (tr, b)))
+    {
+        // A PreToolUse hook rejected the tool: it never ran, so this is the Pre
+        // firing's blocked outcome rather than a PostToolUse. Scanned across all
+        // tool_result blocks — a parallel batch may bury the rejection behind an
+        // ordinary result.
+        ev.event = "PreToolUse".to_string();
+        ev.tool_name = Some(block.tool);
+        ev.correlation_id = tr.tool_use_id.clone();
+        ev.outcome = Some(HookOutcome::Blocked);
+        ev.hook_command = block.command;
+        ev.block_reason = block.reason;
+    } else if let Some(tr) = e.tool_results().next() {
+        ev.event = "PostToolUse".to_string();
+        ev.tool_name = post_tool;
+        ev.correlation_id = tr.tool_use_id.clone();
+        ev.is_error = tr.is_error;
+    } else if let Some(b) = e.hook_blocking() {
+        // Deliberately in addition to the bare PostToolUse from the tool_result
+        // twin entry: the tool ran (its result resolves the Pre pairing) and the
+        // hook then blocked — two facts, two events, paired by correlation_id.
+        ev.event = stop_event(&b.event, is_sub);
+        ev.tool_name = b.tool;
+        ev.correlation_id = b.tool_use_id;
+        ev.outcome = Some(HookOutcome::Blocked);
+        ev.hook_command = b.command;
+        ev.block_reason = b.reason;
+    } else if let Some(c) = e.hook_cancelled() {
+        ev.event = stop_event(&c.event, is_sub);
+        ev.outcome = Some(HookOutcome::Cancelled);
+        ev.duration_ms = c.duration_ms;
+        ev.hook_command = c.command;
+    } else if let Some(s) = e.hook_summary() {
+        // Before is_turn_end: a blocked summary (preventedContinuation) is not a
+        // turn end, but the Stop lifecycle did fire and must still be reported.
+        ev.event = (if is_sub { "SubagentStop" } else { "Stop" }).to_string();
+        ev.outcome = Some(if s.blocked {
+            HookOutcome::Blocked
+        } else {
+            HookOutcome::Completed
+        });
+        ev.duration_ms = (s.duration_ms > 0.0).then_some(s.duration_ms);
+        ev.hook_command = (!s.commands.is_empty()).then(|| s.commands.join("\n"));
+        ev.block_reason = s.stop_reason;
+        ev.is_error = s.had_errors.then_some(true);
+    } else if e.is_turn_end() {
+        ev.event = (if is_sub { "SubagentStop" } else { "Stop" }).to_string();
+    } else {
+        return None;
+    }
+    Some(ev)
 }
 
 /// Creates an active main session.
@@ -1401,6 +1451,146 @@ mod tests {
         let kinds: Vec<&str> = out.iter().map(|h| h.event.as_str()).collect();
         assert_eq!(kinds, vec!["PreToolUse", "SubagentStop"]);
         assert!(out.iter().all(|h| h.agent_id.as_deref() == Some("aid1")));
+    }
+
+    /// A stop_hook_summary enriches the Stop event with the recorded execution:
+    /// outcome, wall time, and the commands. A plain turn_duration stays bare.
+    #[test]
+    fn stop_summary_enriches_stop_event() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let summary = e(
+            r#"{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"afplay Funk.aiff","durationMs":2868}],"hookErrors":[],"preventedContinuation":false,"stopReason":"","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#,
+        );
+        let bare = e(r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-07-04T14:31:24.516Z","sessionId":"S"}"#);
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[summary, bare], &mut out);
+
+        let stops: Vec<_> = out.iter().filter(|h| h.event == "Stop").collect();
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].outcome, Some(HookOutcome::Completed));
+        assert_eq!(stops[0].duration_ms, Some(2868.0));
+        assert_eq!(stops[0].hook_command.as_deref(), Some("afplay Funk.aiff"));
+        assert_eq!(stops[0].is_error, None, "no hookErrors, no error flag");
+        assert_eq!(stops[1].outcome, None, "turn_duration records no execution");
+    }
+
+    /// preventedContinuation marks the Stop event blocked and carries the reason.
+    /// In a sub agent the same record becomes a blocked SubagentStop.
+    #[test]
+    fn blocked_stop_summary_and_sub_variant() {
+        use crate::hook_events::HookOutcome;
+        let json = r#"{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"./gate.sh","durationMs":900}],"hookErrors":[],"preventedContinuation":true,"stopReason":"keep going","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#;
+        let mut out = Vec::new();
+        apply_main(&mut World::default(), "S", &[e(json)], &mut out);
+        let stop = out.iter().find(|h| h.event == "Stop").unwrap();
+        assert_eq!(stop.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(stop.block_reason.as_deref(), Some("keep going"));
+
+        let mut out = Vec::new();
+        apply_sub(&mut World::default(), "S", "aid1", None, &[e(json)], &mut out);
+        let stop = out.iter().find(|h| h.event == "SubagentStop").unwrap();
+        assert_eq!(stop.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(stop.agent_id.as_deref(), Some("aid1"));
+    }
+
+    /// A blocked stop summary keeps the session working: the turn did not end,
+    /// so the work kind and active skill survive the entry.
+    #[test]
+    fn blocked_stop_summary_keeps_working_state() {
+        let mut w = World::default();
+        let skill = e(r#"{"type":"assistant","timestamp":"2026-07-04T14:31:00.000Z","sessionId":"S","cwd":"/p","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"verify"}}]}}"#);
+        let edit = e(r#"{"type":"assistant","timestamp":"2026-07-04T14:31:10.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/a/x.ts"}}]}}"#);
+        let blocked = e(
+            r#"{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"./gate.sh","durationMs":900}],"preventedContinuation":true,"stopReason":"keep going","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#,
+        );
+        apply_main(&mut w, "S", &[skill, edit, blocked], &mut Vec::new());
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.current.kind, WorkKind::Editing, "the turn is still running");
+        assert_eq!(s.current.active_skill.as_deref(), Some("verify"), "skill survives");
+    }
+
+    /// A PreToolUse rejection buried behind an ordinary result in a parallel
+    /// batch is still found (all tool_result blocks are scanned).
+    #[test]
+    fn pre_hook_rejection_found_in_parallel_batch() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let batch = e(
+            r#"{"type":"user","timestamp":"2026-07-08T10:29:02.706Z","sessionId":"S","cwd":"/p","message":{"role":"user","content":[{"type":"tool_result","content":"ok","is_error":false,"tool_use_id":"tu_1"},{"type":"tool_result","content":"PreToolUse:Read hook error: [deny.sh]: nope","is_error":true,"tool_use_id":"tu_2"}]}}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[batch], &mut out);
+        let blocked = out
+            .iter()
+            .find(|h| h.event == "PreToolUse")
+            .expect("rejection found behind the ordinary result");
+        assert_eq!(blocked.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("tu_2"));
+    }
+
+    /// A PreToolUse hook rejection (erroring tool_result with the CLI's message
+    /// format) reconstructs as a blocked PreToolUse, not a PostToolUse — the tool
+    /// never ran.
+    #[test]
+    fn pre_hook_rejection_reconstructs_as_blocked_pre() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let tool = e(r#"{"type":"assistant","timestamp":"2026-07-08T10:29:00.000Z","sessionId":"S","cwd":"/p","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/x.txt"}}]}}"#);
+        let rejected = e(
+            r#"{"type":"user","timestamp":"2026-07-08T10:29:02.706Z","sessionId":"S","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Read hook error: [exit 2]: not allowed\n","is_error":true,"tool_use_id":"tu_1"}]}}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[tool, rejected], &mut out);
+
+        let events: Vec<&str> = out.iter().map(|h| h.event.as_str()).collect();
+        assert!(!events.contains(&"PostToolUse"), "a rejected tool has no Post");
+        let blocked = out
+            .iter()
+            .find(|h| h.event == "PreToolUse" && h.outcome.is_some())
+            .expect("blocked Pre emitted");
+        assert_eq!(blocked.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(blocked.tool_name.as_deref(), Some("Read"));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("tu_1"));
+        assert_eq!(blocked.hook_command.as_deref(), Some("exit 2"));
+        assert_eq!(blocked.block_reason.as_deref(), Some("not allowed"));
+    }
+
+    /// A hook_blocking_error attachment reconstructs as a blocked PostToolUse
+    /// carrying the tool, pairing id, command, and reason.
+    #[test]
+    fn hook_blocking_attachment_reconstructs() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let entry = e(
+            r#"{"type":"attachment","attachment":{"type":"hook_blocking_error","hookName":"PostToolUse:Bash","toolUseID":"tu_9","hookEvent":"PostToolUse","blockingError":{"blockingError":"[lint.sh]: style violation","command":"lint.sh"}},"timestamp":"2026-07-08T10:34:11.086Z","sessionId":"S"}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[entry], &mut out);
+        let b = out.iter().find(|h| h.event == "PostToolUse").expect("emitted");
+        assert_eq!(b.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(b.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(b.correlation_id.as_deref(), Some("tu_9"));
+        assert_eq!(b.hook_command.as_deref(), Some("lint.sh"));
+    }
+
+    /// A hook_cancelled attachment reconstructs as a cancelled event with the
+    /// elapsed time; in a sub agent a cancelled Stop becomes SubagentStop.
+    #[test]
+    fn hook_cancelled_attachment_reconstructs() {
+        use crate::hook_events::HookOutcome;
+        let json = r#"{"type":"attachment","attachment":{"type":"hook_cancelled","hookName":"Stop","hookEvent":"Stop","command":"afplay Funk.aiff","durationMs":2179},"timestamp":"2026-07-04T21:06:14.258Z","sessionId":"S"}"#;
+        let mut out = Vec::new();
+        apply_main(&mut World::default(), "S", &[e(json)], &mut out);
+        let c = out.iter().find(|h| h.event == "Stop").expect("emitted");
+        assert_eq!(c.outcome, Some(HookOutcome::Cancelled));
+        assert_eq!(c.duration_ms, Some(2179.0));
+        assert_eq!(c.hook_command.as_deref(), Some("afplay Funk.aiff"));
+
+        let mut out = Vec::new();
+        apply_sub(&mut World::default(), "S", "aid1", None, &[e(json)], &mut out);
+        assert_eq!(out[0].event, "SubagentStop");
+        assert_eq!(out[0].outcome, Some(HookOutcome::Cancelled));
     }
 
     #[test]
