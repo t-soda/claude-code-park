@@ -147,6 +147,9 @@ impl ContentBlock {
             return None;
         }
         // "[<command>]: <stderr>" — both halves optional-ish; degrade to None fields.
+        // The format is inherently ambiguous when the command itself contains "]: ";
+        // splitting at the first occurrence errs toward pushing the excess into the
+        // reason, which only ever feeds display labels.
         let (command, reason) = match rest.strip_prefix('[').and_then(|r| r.split_once("]: ")) {
             Some((cmd, msg)) => (Some(cmd.to_string()), Some(msg.trim().to_string())),
             None => (None, Some(rest.trim().to_string())),
@@ -269,11 +272,20 @@ impl RawEntry {
     }
 
     /// Whether it is a turn-end marker (system/turn_duration, etc. = transition to waiting for user input).
+    /// A stop_hook_summary whose hook blocked the stop (preventedContinuation) is
+    /// NOT a turn end: the agent keeps working, so the session must not drop to
+    /// Idle nor clear its skill/todos.
     pub fn is_turn_end(&self) -> bool {
-        self.entry_type.as_deref() == Some("system")
-            && (self.subtype.as_deref() == Some("turn_duration")
-                || (self.subtype.as_deref() == Some("stop_hook_summary")
-                    && self.is_stop_labeled()))
+        if self.entry_type.as_deref() != Some("system") {
+            return false;
+        }
+        match self.subtype.as_deref() {
+            Some("turn_duration") => true,
+            Some("stop_hook_summary") => {
+                self.is_stop_labeled() && self.prevented_continuation != Some(true)
+            }
+            _ => false,
+        }
     }
 
     /// Whether a stop_hook_summary is about the stop lifecycle. hookLabel is absent
@@ -305,10 +317,12 @@ impl RawEntry {
             commands: infos.iter().filter_map(|i| i.command.clone()).collect(),
             had_errors: self.hook_errors.as_ref().is_some_and(|e| !e.is_empty()),
             blocked: self.prevented_continuation == Some(true),
+            // Trimmed like every other block_reason source (hook_blocking, pre_hook_block).
             stop_reason: self
                 .stop_reason
-                .clone()
-                .filter(|r| !r.trim().is_empty()),
+                .as_deref()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty()),
         })
     }
 
@@ -483,17 +497,22 @@ mod tests {
         assert!(entry.is_turn_end(), "an unlabeled summary is still a turn end");
     }
 
-    /// preventedContinuation + stopReason mark the run blocked, and hookErrors
-    /// flip had_errors.
+    /// preventedContinuation + stopReason mark the run blocked (with the reason
+    /// trimmed like every other block_reason source), hookErrors flip had_errors,
+    /// and — crucially — a blocked stop is NOT a turn end: the agent keeps working.
     #[test]
     fn stop_hook_summary_blocked_and_errors() {
         let entry = e(
-            r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"./check.sh","durationMs":410}],"hookErrors":["exit 2"],"preventedContinuation":true,"stopReason":"tests are failing","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#,
+            r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"./check.sh","durationMs":410}],"hookErrors":["exit 2"],"preventedContinuation":true,"stopReason":" tests are failing\n","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#,
         );
         let s = entry.hook_summary().expect("should parse");
         assert!(s.blocked);
         assert!(s.had_errors);
         assert_eq!(s.stop_reason.as_deref(), Some("tests are failing"));
+        assert!(
+            !entry.is_turn_end(),
+            "a hook that blocked the stop kept the turn alive"
+        );
     }
 
     /// A summary labeled for another lifecycle (the CLI binary already reads

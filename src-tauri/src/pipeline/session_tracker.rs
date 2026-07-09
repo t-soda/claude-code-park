@@ -35,16 +35,9 @@ pub fn apply_main(
     if is_new {
         out.push(crate::hook_events::HookEvent {
             session_id: session_id.to_string(),
-            agent_id: None,
             event: "SessionStart".to_string(),
-            tool_name: None,
             ts: entries[0].timestamp.clone().unwrap_or_default(),
-            correlation_id: None,
-            is_error: None,
-            outcome: None,
-            duration_ms: None,
-            hook_command: None,
-            block_reason: None,
+            ..Default::default()
         });
     }
     let session = world
@@ -166,18 +159,19 @@ pub(crate) fn reconstruct(
     is_sub: bool,
 ) -> Option<crate::hook_events::HookEvent> {
     use crate::hook_events::{HookEvent, HookOutcome};
+    /// Stop lifecycle names swap for the subagent variant inside a sub transcript.
+    fn stop_event(event: &str, is_sub: bool) -> String {
+        if is_sub && event == "Stop" {
+            "SubagentStop".to_string()
+        } else {
+            event.to_string()
+        }
+    }
     let mut ev = HookEvent {
         session_id: session_id.to_string(),
         agent_id: agent_id.map(str::to_string),
-        event: String::new(),
-        tool_name: None,
         ts: e.timestamp.clone().unwrap_or_default(),
-        correlation_id: None,
-        is_error: None,
-        outcome: None,
-        duration_ms: None,
-        hook_command: None,
-        block_reason: None,
+        ..Default::default()
     };
     if e.is_user_prompt() && !is_sub {
         ev.event = "UserPromptSubmit".to_string();
@@ -185,51 +179,55 @@ pub(crate) fn reconstruct(
         ev.event = "PreToolUse".to_string();
         ev.tool_name = tb.name.clone();
         ev.correlation_id = tb.id.clone();
+    } else if let Some((tr, block)) = e
+        .tool_results()
+        .find_map(|tr| tr.pre_hook_block().map(|b| (tr, b)))
+    {
+        // A PreToolUse hook rejected the tool: it never ran, so this is the Pre
+        // firing's blocked outcome rather than a PostToolUse. Scanned across all
+        // tool_result blocks — a parallel batch may bury the rejection behind an
+        // ordinary result.
+        ev.event = "PreToolUse".to_string();
+        ev.tool_name = Some(block.tool);
+        ev.correlation_id = tr.tool_use_id.clone();
+        ev.outcome = Some(HookOutcome::Blocked);
+        ev.hook_command = block.command;
+        ev.block_reason = block.reason;
     } else if let Some(tr) = e.tool_results().next() {
-        if let Some(block) = tr.pre_hook_block() {
-            // The PreToolUse hook rejected the tool: it never ran, so this is the
-            // Pre firing's blocked outcome rather than a PostToolUse.
-            ev.event = "PreToolUse".to_string();
-            ev.tool_name = Some(block.tool);
-            ev.correlation_id = tr.tool_use_id.clone();
-            ev.outcome = Some(HookOutcome::Blocked);
-            ev.hook_command = block.command;
-            ev.block_reason = block.reason;
-        } else {
-            ev.event = "PostToolUse".to_string();
-            ev.tool_name = post_tool;
-            ev.correlation_id = tr.tool_use_id.clone();
-            ev.is_error = tr.is_error;
-        }
+        ev.event = "PostToolUse".to_string();
+        ev.tool_name = post_tool;
+        ev.correlation_id = tr.tool_use_id.clone();
+        ev.is_error = tr.is_error;
     } else if let Some(b) = e.hook_blocking() {
-        ev.event = b.event;
+        // Deliberately in addition to the bare PostToolUse from the tool_result
+        // twin entry: the tool ran (its result resolves the Pre pairing) and the
+        // hook then blocked — two facts, two events, paired by correlation_id.
+        ev.event = stop_event(&b.event, is_sub);
         ev.tool_name = b.tool;
         ev.correlation_id = b.tool_use_id;
         ev.outcome = Some(HookOutcome::Blocked);
         ev.hook_command = b.command;
         ev.block_reason = b.reason;
     } else if let Some(c) = e.hook_cancelled() {
-        ev.event = if is_sub && c.event == "Stop" {
-            "SubagentStop".to_string()
-        } else {
-            c.event
-        };
+        ev.event = stop_event(&c.event, is_sub);
         ev.outcome = Some(HookOutcome::Cancelled);
         ev.duration_ms = c.duration_ms;
         ev.hook_command = c.command;
+    } else if let Some(s) = e.hook_summary() {
+        // Before is_turn_end: a blocked summary (preventedContinuation) is not a
+        // turn end, but the Stop lifecycle did fire and must still be reported.
+        ev.event = (if is_sub { "SubagentStop" } else { "Stop" }).to_string();
+        ev.outcome = Some(if s.blocked {
+            HookOutcome::Blocked
+        } else {
+            HookOutcome::Completed
+        });
+        ev.duration_ms = (s.duration_ms > 0.0).then_some(s.duration_ms);
+        ev.hook_command = (!s.commands.is_empty()).then(|| s.commands.join("\n"));
+        ev.block_reason = s.stop_reason;
+        ev.is_error = s.had_errors.then_some(true);
     } else if e.is_turn_end() {
         ev.event = (if is_sub { "SubagentStop" } else { "Stop" }).to_string();
-        if let Some(s) = e.hook_summary() {
-            ev.outcome = Some(if s.blocked {
-                HookOutcome::Blocked
-            } else {
-                HookOutcome::Completed
-            });
-            ev.duration_ms = (s.duration_ms > 0.0).then_some(s.duration_ms);
-            ev.hook_command = (!s.commands.is_empty()).then(|| s.commands.join("\n"));
-            ev.block_reason = s.stop_reason;
-            ev.is_error = s.had_errors.then_some(true);
-        }
     } else {
         return None;
     }
@@ -1494,6 +1492,41 @@ mod tests {
         let stop = out.iter().find(|h| h.event == "SubagentStop").unwrap();
         assert_eq!(stop.outcome, Some(HookOutcome::Blocked));
         assert_eq!(stop.agent_id.as_deref(), Some("aid1"));
+    }
+
+    /// A blocked stop summary keeps the session working: the turn did not end,
+    /// so the work kind and active skill survive the entry.
+    #[test]
+    fn blocked_stop_summary_keeps_working_state() {
+        let mut w = World::default();
+        let skill = e(r#"{"type":"assistant","timestamp":"2026-07-04T14:31:00.000Z","sessionId":"S","cwd":"/p","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"verify"}}]}}"#);
+        let edit = e(r#"{"type":"assistant","timestamp":"2026-07-04T14:31:10.000Z","sessionId":"S","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/a/x.ts"}}]}}"#);
+        let blocked = e(
+            r#"{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"command":"./gate.sh","durationMs":900}],"preventedContinuation":true,"stopReason":"keep going","timestamp":"2026-07-04T14:31:24.506Z","sessionId":"S"}"#,
+        );
+        apply_main(&mut w, "S", &[skill, edit, blocked], &mut Vec::new());
+        let s = w.sessions.get("S").unwrap();
+        assert_eq!(s.current.kind, WorkKind::Editing, "the turn is still running");
+        assert_eq!(s.current.active_skill.as_deref(), Some("verify"), "skill survives");
+    }
+
+    /// A PreToolUse rejection buried behind an ordinary result in a parallel
+    /// batch is still found (all tool_result blocks are scanned).
+    #[test]
+    fn pre_hook_rejection_found_in_parallel_batch() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let batch = e(
+            r#"{"type":"user","timestamp":"2026-07-08T10:29:02.706Z","sessionId":"S","cwd":"/p","message":{"role":"user","content":[{"type":"tool_result","content":"ok","is_error":false,"tool_use_id":"tu_1"},{"type":"tool_result","content":"PreToolUse:Read hook error: [deny.sh]: nope","is_error":true,"tool_use_id":"tu_2"}]}}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[batch], &mut out);
+        let blocked = out
+            .iter()
+            .find(|h| h.event == "PreToolUse")
+            .expect("rejection found behind the ordinary result");
+        assert_eq!(blocked.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("tu_2"));
     }
 
     /// A PreToolUse hook rejection (erroring tool_result with the CLI's message

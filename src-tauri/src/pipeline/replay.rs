@@ -120,8 +120,12 @@ impl ReplayBuilder {
             self.last_tool.clone(),
             self.agent_id.is_some(),
         ) {
+            use crate::hook_events::HookOutcome;
             let (kind, text) = match ev.event.as_str() {
-                "UserPromptSubmit" => (
+                // Only a real human prompt maps to UserPrompt; a recorded
+                // UserPromptSubmit hook execution (blocked/cancelled attachment)
+                // must not fabricate an empty prompt row in the log.
+                "UserPromptSubmit" if ev.outcome.is_none() => (
                     ReplayEventKind::UserPrompt,
                     e.user_prompt_text().map(|s| excerpt(s, EXCERPT_CHARS)),
                 ),
@@ -129,9 +133,16 @@ impl ReplayBuilder {
                 "PostToolUse" => (ReplayEventKind::PostToolUse, None),
                 "Stop" => (ReplayEventKind::TurnEnd, None),
                 "SubagentStop" => {
-                    self.out.saw_stop = true;
+                    // A blocked stop means the agent keeps working; only a real
+                    // departure suppresses the synthesized final SubagentStop.
+                    if ev.outcome != Some(HookOutcome::Blocked) {
+                        self.out.saw_stop = true;
+                    }
                     (ReplayEventKind::SubagentStop, None)
                 }
+                // Hook records for lifecycles outside the replay vocabulary
+                // (e.g. a cancelled Notification hook) are dropped rather than
+                // shoehorned into a wrong kind.
                 _ => return,
             };
             // A recorded run with a duration gets a synthesized start marker at
@@ -772,6 +783,78 @@ mod tests {
             .find(|ev| ev.kind == ReplayEventKind::HookRunStart)
             .expect("start marker synthesized");
         assert_eq!(start.at_ms, 0.0);
+    }
+
+    /// A blocked stop summary still yields its TurnEnd marker (with the blocked
+    /// outcome and run start), but no Idle activity row — the turn kept going.
+    #[test]
+    fn blocked_summary_keeps_activity_but_reports_stop() {
+        use crate::hook_events::HookOutcome;
+        let main = build_main(&[
+            &format!(r#"{{"type":"assistant","timestamp":"{T0}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c1","name":"Edit","input":{{"file_path":"/a/x.ts"}}}}]}}}}"#),
+            &format!(r#"{{"type":"system","subtype":"stop_hook_summary","hookInfos":[{{"command":"./gate.sh","durationMs":900}}],"preventedContinuation":true,"stopReason":"keep going","timestamp":"{T1}"}}"#),
+        ]);
+        let data = assemble("SID", main, vec![]).expect("assembles");
+        let end = data
+            .events
+            .iter()
+            .find(|ev| ev.kind == ReplayEventKind::TurnEnd)
+            .expect("the Stop lifecycle fired and is reported");
+        assert_eq!(end.outcome, Some(HookOutcome::Blocked));
+        assert_eq!(end.block_reason.as_deref(), Some("keep going"));
+        assert!(
+            data.events.iter().any(|ev| ev.kind == ReplayEventKind::HookRunStart),
+            "the run interval is still synthesized"
+        );
+        assert!(
+            !data
+                .events
+                .iter()
+                .any(|ev| ev.kind == ReplayEventKind::Activity && ev.work == Some(WorkKind::Idle)),
+            "no Idle row: the turn did not end"
+        );
+    }
+
+    /// A recorded hook execution for a lifecycle outside the replay vocabulary
+    /// (e.g. a cancelled UserPromptSubmit hook) is dropped instead of fabricating
+    /// an empty prompt row.
+    #[test]
+    fn foreign_lifecycle_records_do_not_fabricate_rows() {
+        let main = build_main(&[
+            &format!(r#"{{"type":"user","timestamp":"{T0}","message":{{"role":"user","content":"go"}}}}"#),
+            &format!(r#"{{"type":"attachment","attachment":{{"type":"hook_cancelled","hookName":"UserPromptSubmit","hookEvent":"UserPromptSubmit","command":"lint.sh","durationMs":150}},"timestamp":"{T1}"}}"#),
+        ]);
+        let prompts = main
+            .events
+            .iter()
+            .filter(|ev| ev.kind == ReplayEventKind::UserPrompt)
+            .count();
+        assert_eq!(prompts, 1, "only the real human prompt appears");
+    }
+
+    /// A blocked SubagentStop does not count as the sub's departure: the
+    /// synthesized final stop still marks the real end of the transcript.
+    #[test]
+    fn blocked_subagent_stop_does_not_suppress_synthesized_stop() {
+        use crate::hook_events::HookOutcome;
+        let main = build_main(&[&format!(
+            r#"{{"type":"assistant","timestamp":"{T0}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"c1","name":"Agent","input":{{"subagent_type":"worker"}}}}]}}}}"#
+        )]);
+        let mut sub = ReplayBuilder::new_sub("A");
+        sub.push(&e(&format!(
+            r#"{{"type":"system","subtype":"stop_hook_summary","hookInfos":[{{"command":"./gate.sh","durationMs":100}}],"preventedContinuation":true,"stopReason":"more","timestamp":"{T1}"}}"#
+        )));
+        sub.push(&e(&format!(r#"{{"type":"assistant","timestamp":"{T2}","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"s1","name":"Bash","input":{{"command":"ls"}}}}]}}}}"#)));
+
+        let data = assemble("SID", main, vec![sub_nometa("A", sub.finish())]).expect("assembles");
+        let stops: Vec<_> = data
+            .events
+            .iter()
+            .filter(|ev| ev.kind == ReplayEventKind::SubagentStop)
+            .collect();
+        assert_eq!(stops.len(), 2, "blocked marker + synthesized departure");
+        assert_eq!(stops[0].outcome, Some(HookOutcome::Blocked));
+        assert_eq!(stops[1].at_ms, 10000.0, "departure at the last entry");
     }
 
     /// A blocked PreToolUse (hook rejection in the tool_result) flows its outcome
