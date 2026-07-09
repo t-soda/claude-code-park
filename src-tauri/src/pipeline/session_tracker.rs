@@ -181,12 +181,16 @@ pub(crate) fn reconstruct(
         ev.correlation_id = tb.id.clone();
     } else if let Some((tr, block)) = e
         .tool_results()
-        .find_map(|tr| tr.pre_hook_block().map(|b| (tr, b)))
+        .filter_map(|tr| tr.pre_hook_block().map(|b| (tr, b)))
+        .find(|(_, b)| b.reason.is_some())
+        .or_else(|| e.tool_results().find_map(|tr| tr.pre_hook_block().map(|b| (tr, b))))
     {
         // A PreToolUse hook rejected the tool: it never ran, so this is the Pre
         // firing's blocked outcome rather than a PostToolUse. Scanned across all
         // tool_result blocks — a parallel batch may bury the rejection behind an
-        // ordinary result.
+        // ordinary result, or behind another rejection whose hook produced no
+        // stderr; a block carrying a reason is preferred so a real rejection
+        // message doesn't lose to a silent one earlier in the batch.
         ev.event = "PreToolUse".to_string();
         ev.tool_name = Some(block.tool);
         ev.correlation_id = tr.tool_use_id.clone();
@@ -1527,6 +1531,47 @@ mod tests {
             .expect("rejection found behind the ordinary result");
         assert_eq!(blocked.outcome, Some(HookOutcome::Blocked));
         assert_eq!(blocked.correlation_id.as_deref(), Some("tu_2"));
+    }
+
+    /// When a parallel batch has two PreToolUse rejections and only one carries a
+    /// reason (the other's hook exited 2 with empty stderr), the one with a reason
+    /// wins instead of the first block-shaped result silently winning with no reason.
+    #[test]
+    fn pre_hook_rejection_prefers_the_block_with_a_reason() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let batch = e(
+            r#"{"type":"user","timestamp":"2026-07-08T10:29:02.706Z","sessionId":"S","cwd":"/p","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Read hook error: []: ","is_error":true,"tool_use_id":"tu_1"},{"type":"tool_result","content":"PreToolUse:Bash hook error: [guard.sh]: not allowed","is_error":true,"tool_use_id":"tu_2"}]}}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[batch], &mut out);
+        let blocked = out
+            .iter()
+            .find(|h| h.event == "PreToolUse" && h.outcome == Some(HookOutcome::Blocked))
+            .expect("a blocked PreToolUse event");
+        assert_eq!(blocked.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("tu_2"));
+        assert_eq!(blocked.block_reason.as_deref(), Some("not allowed"));
+    }
+
+    /// When no block in the batch carries a reason, the first block-shaped result
+    /// is still reported (preserves the pre-existing fallback behavior).
+    #[test]
+    fn pre_hook_rejection_falls_back_to_first_block_when_none_has_a_reason() {
+        use crate::hook_events::HookOutcome;
+        let mut w = World::default();
+        let batch = e(
+            r#"{"type":"user","timestamp":"2026-07-08T10:29:02.706Z","sessionId":"S","cwd":"/p","message":{"role":"user","content":[{"type":"tool_result","content":"PreToolUse:Read hook error: []: ","is_error":true,"tool_use_id":"tu_1"},{"type":"tool_result","content":"PreToolUse:Bash hook error: []: ","is_error":true,"tool_use_id":"tu_2"}]}}"#,
+        );
+        let mut out = Vec::new();
+        apply_main(&mut w, "S", &[batch], &mut out);
+        let blocked = out
+            .iter()
+            .find(|h| h.event == "PreToolUse" && h.outcome == Some(HookOutcome::Blocked))
+            .expect("a blocked PreToolUse event");
+        assert_eq!(blocked.tool_name.as_deref(), Some("Read"));
+        assert_eq!(blocked.correlation_id.as_deref(), Some("tu_1"));
+        assert_eq!(blocked.block_reason, None);
     }
 
     /// A PreToolUse hook rejection (erroring tool_result with the CLI's message
